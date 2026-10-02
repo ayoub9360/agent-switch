@@ -5,8 +5,6 @@ import {
   Plus,
   Search,
   PanelLeftClose,
-  Monitor,
-  Server,
 } from "lucide-react"
 import { Button } from "@agent-switch/ui/components/button"
 import { cn } from "@agent-switch/ui/lib/utils"
@@ -142,19 +140,6 @@ export function Sidebar({
               </button>
             )
           })}
-          <div className="local-note">
-            <Server size={15} />
-            <div>
-              <strong>Configuration locale</strong>
-              <p>Brouillons avant application.</p>
-            </div>
-          </div>
-          <div className="machine">
-            <Monitor size={13} />
-            <span>Machine connectée</span>
-            <span className="status-dot" />
-            <span>v0.1.0</span>
-          </div>
         </div>
       </aside>
     </>
