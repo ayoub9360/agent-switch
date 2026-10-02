@@ -376,6 +376,7 @@ input[data-slot="input"] {
 .sidebar-bottom {
   margin-top: auto;
   padding-top: 32px;
+  padding-bottom: 16px;
 }
 .local-note {
   border: 1px solid var(--border);

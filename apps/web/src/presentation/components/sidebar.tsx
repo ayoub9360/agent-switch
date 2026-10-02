@@ -1,6 +1,5 @@
 import {
   ArrowLeftRight,
-  ChevronsUpDown,
   Folder,
   Plus,
   Search,
@@ -57,17 +56,6 @@ export function Sidebar({
             <PanelLeftClose size={17} />
           </button>
         </div>
-        <button
-          className="workspace-picker"
-          onClick={() => navigate("profiles")}
-        >
-          <span className="workspace-avatar">A</span>
-          <span>
-            <strong>Mon espace de travail</strong>
-            <small>Configuration locale</small>
-          </span>
-          <ChevronsUpDown size={14} />
-        </button>
         <button className="sidebar-search" onClick={search}>
           <Search size={14} />
           <span>Rechercher…</span>
