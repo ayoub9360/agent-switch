@@ -910,8 +910,18 @@ input[data-slot="input"] {
   font-size: 18px;
   flex-shrink: 0;
 }
-.assistant-mark.claude {
-  color: #d39a7f;
+.assistant-logo {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex-shrink: 0;
+  background-color: currentColor;
+  mask-size: contain;
+  mask-position: center;
+  mask-repeat: no-repeat;
+}
+.assistant-logo.claude {
+  background-color: #d97757;
 }
 .subtle-caption {
   color: var(--subtle);

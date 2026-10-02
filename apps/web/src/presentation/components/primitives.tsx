@@ -14,6 +14,8 @@ import {
   DialogTitle,
 } from "@agent-switch/ui/components/dialog"
 import type { Assistant } from "@/domain/workspace"
+import codexLogo from "@/assets/logos/codex.svg"
+import claudeCodeLogo from "@/assets/logos/claude-code.svg"
 
 export function Pill({
   children,
@@ -24,10 +26,20 @@ export function Pill({
 }) {
   return <span className={cn("pill", `pill-${tone}`)}>{children}</span>
 }
+export function AssistantLogo({ assistant }: { assistant: Assistant }) {
+  const logo = assistant === "claude" ? claudeCodeLogo : codexLogo
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("assistant-logo", assistant)}
+      style={{ maskImage: `url(${JSON.stringify(logo)})` }}
+    />
+  )
+}
 export function AssistantMark({ assistant }: { assistant: Assistant }) {
   return (
     <span aria-hidden="true" className={cn("assistant-mark", assistant)}>
-      {assistant === "claude" ? "✳" : "⌘"}
+      <AssistantLogo assistant={assistant} />
     </span>
   )
 }

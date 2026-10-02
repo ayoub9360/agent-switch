@@ -12,6 +12,7 @@ import { Button } from "@agent-switch/ui/components/button"
 import { cn } from "@agent-switch/ui/lib/utils"
 import type { Profile, Workspace } from "@/domain/workspace"
 import { kinds, sections, type Page } from "../config"
+import { AssistantLogo } from "./primitives"
 
 interface Props {
   workspace: Workspace
@@ -177,8 +178,8 @@ export function AssistantFilter({
       {(
         [
           ["all", "Tous les assistants"],
-          ["claude", "✳ Claude Code"],
-          ["codex", "⌘ Codex"],
+          ["claude", "Claude Code"],
+          ["codex", "Codex"],
         ] as const
       ).map(([key, label]) => (
         <Button
@@ -189,6 +190,7 @@ export function AssistantFilter({
           className={cn(value === key && "filter-active")}
           onClick={() => onChange(key)}
         >
+          {key !== "all" && <AssistantLogo assistant={key} />}
           {label}
         </Button>
       ))}
