@@ -17,6 +17,7 @@ import { Switch } from "@agent-switch/ui/components/switch"
 import { cn } from "@agent-switch/ui/lib/utils"
 import {
   assistantNames,
+  changesFor,
   type Assistant,
   type Profile,
   type Resource,
@@ -210,6 +211,9 @@ function ResourceDetail({
   const [tested, setTested] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
   const changed = JSON.stringify(draft) !== JSON.stringify(resource)
+  const pending = changesFor(profile).some(
+    (change) => change.id === resource.id
+  )
   const dirtyCallback = useRef(onDirtyChange)
   useEffect(() => {
     dirtyCallback.current = onDirtyChange
@@ -232,8 +236,22 @@ function ResourceDetail({
               ? "hooks.json"
               : "instructions.md"}
         </span>
-        <Pill tone={changed ? "amber" : "neutral"}>
-          {changed ? "Non enregistré" : "Brouillon"}
+        <Pill
+          tone={
+            changed || pending
+              ? "amber"
+              : resource.enabled
+                ? "green"
+                : "neutral"
+          }
+        >
+          {changed
+            ? "Non enregistré"
+            : pending
+              ? "Brouillon"
+              : resource.enabled
+                ? "Actif"
+                : "Désactivé"}
         </Pill>
       </div>
       <div className="detail-content">
