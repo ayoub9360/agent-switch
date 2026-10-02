@@ -51,6 +51,45 @@ En développement via Tailscale, définir `AGENT_SWITCH_ORIGINS` pour l’API et
 Vite avec `pnpm --filter @agent-switch/web exec vite --host ADRESSE_TAILSCALE`.
 La copie automatique dans le presse-papiers nécessite HTTPS ou localhost.
 
+## Lanceur npm
+
+Le paquet publiable est dans `packages/cli`. Il embarque le serveur compilé et
+l’interface Vite ; Node.js 22.12+ et npm suffisent sur la machine utilisatrice.
+Le paquet npm se nomme `@ayoub9360/agent-switch` ; l’application et la commande
+restent nommées Agent Switch et `agent-switch`. Après publication :
+
+```bash
+npx @ayoub9360/agent-switch@latest
+npx @ayoub9360/agent-switch@latest --no-open
+npx @ayoub9360/agent-switch@latest --port 4200
+```
+
+Sans argument, le lanceur ouvre le navigateur une fois le serveur prêt. Il écoute
+sur `127.0.0.1:4141`, ou sur un port libre si ce port est occupé. Un port explicite
+(`--port` ou `AGENT_SWITCH_PORT`) doit être libre ; `--port 0` choisit un port libre.
+Une instance web locale existante est réutilisée après vérification. `Ctrl+C`
+arrête le serveur lancé dans ce terminal et libère son verrou.
+
+Pour essayer le lanceur depuis le dépôt :
+
+```bash
+pnpm build
+node packages/cli/dist/cli.js
+```
+
+Pour fabriquer une archive installable, sans publier :
+
+```bash
+pnpm pack:cli
+npm exec --package=./packages/cli/ayoub9360-agent-switch-0.1.0.tgz -- agent-switch --no-open
+```
+
+L’archive contient uniquement `dist/`, le manifeste et le README. Les dépendances
+internes sont compilées dans le serveur ; aucune dépendance `workspace:` n’est
+nécessaire à l’exécution. Les commandes `workspace`, `plan`, `apply`, etc. restent
+disponibles après `npx @ayoub9360/agent-switch@latest` et utilisent un service déjà démarré.
+La publication npm est une étape distincte.
+
 ## Configurations prises en charge
 
 Au premier démarrage, la configuration est construite à partir de la configuration globale

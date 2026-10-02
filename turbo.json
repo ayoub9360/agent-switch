@@ -27,6 +27,10 @@
     "@agent-switch/server#build": {
       "dependsOn": ["^build"],
       "outputs": []
+    },
+    "@ayoub9360/agent-switch#test": {
+      "dependsOn": ["build"],
+      "outputs": []
     }
   }
 }

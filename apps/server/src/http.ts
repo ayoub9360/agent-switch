@@ -73,6 +73,12 @@ export function createApi(
           return send(res, 403, { error: "Unauthorized origin." })
         if (req.headers["x-agent-switch"] !== "1")
           return send(res, 403, { error: "Agent Switch client required." })
+        if (req.method === "GET" && url.pathname === "/api/health")
+          return send(res, 200, {
+            service: "agent-switch",
+            pid: process.pid,
+            web: Boolean(webDirectory),
+          })
         if (req.method === "GET" && url.pathname === "/api/workspace")
           return send(res, 200, await repository.load())
         if (req.method === "GET" && url.pathname === "/api/discovery")

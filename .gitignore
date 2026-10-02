@@ -36,3 +36,6 @@ dist-ssr
 .agent-switch/
 coverage/
 .pnpm-store/
+
+# npm package archives
+*.tgz
