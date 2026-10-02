@@ -28,11 +28,11 @@ export class LocalApi implements WorkspaceRepository, ConfigurationDiscovery {
       data = await response.json()
     } catch {
       throw new Error(
-        "Le service local Agent Switch est indisponible. Démarrez-le avec pnpm dev."
+        "The local Agent Switch service is unavailable. Start it with pnpm dev."
       )
     }
     if (!response.ok)
-      throw new Error(data.error ?? "Le service local a refusé la requête.")
+      throw new Error(data.error ?? "The local service rejected the request.")
     if (
       path === "/workspace" ||
       path === "/refresh" ||
@@ -62,14 +62,11 @@ export class LocalApi implements WorkspaceRepository, ConfigurationDiscovery {
   async refresh() {
     return workspaceSchema.parse(await this.request("/refresh", "POST"))
   }
-  async scan(path = "") {
-    return this.request<Resource[]>(
-      `/discovery?path=${encodeURIComponent(path)}`
-    )
+  async scan() {
+    return this.request<Resource[]>("/discovery")
   }
   async importDetected(input: {
-    name: string
-    path: string
+    name?: string
     targets: ("claude" | "codex")[]
   }) {
     return workspaceSchema.parse(

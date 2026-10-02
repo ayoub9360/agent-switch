@@ -54,8 +54,7 @@ export class WorkspaceController {
   notify = (notice: string) => this.publish({ notice, error: null })
   fail = (error: unknown) =>
     this.publish({
-      error:
-        error instanceof Error ? error.message : "Une erreur est survenue.",
+      error: error instanceof Error ? error.message : "An error occurred.",
       notice: null,
     })
   async run(operation: () => Promise<Workspace>, notice?: string) {
@@ -86,7 +85,7 @@ export function WorkspaceProvider({
 }
 export function useWorkspace() {
   const controller = useContext(WorkspaceContext)
-  if (!controller) throw new Error("WorkspaceProvider manquant.")
+  if (!controller) throw new Error("Missing WorkspaceProvider.")
   const snapshot = useSyncExternalStore(
     controller.subscribe,
     controller.getSnapshot

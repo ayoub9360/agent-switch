@@ -47,15 +47,7 @@ describe("Workspace use cases", () => {
     expect(repository.value.profiles[0]!.applied).toEqual(
       original.profiles[0]!.applied
     )
-    expect(repository.value.profiles[1]).toEqual(original.profiles[1])
     expect(changesFor(repository.value.profiles[0]!)).toHaveLength(3)
-  })
-  it("switching a profile never applies its draft", async () => {
-    const { service, repository } = setup()
-    const before = structuredClone(repository.value.profiles)
-    await service.selectProfile("personal")
-    expect(repository.value.activeProfileId).toBe("personal")
-    expect(repository.value.profiles).toEqual(before)
   })
   it("rejects invalid MCP JSON without writing", () => {
     const { service, repository } = setup()
@@ -65,20 +57,17 @@ describe("Workspace use cases", () => {
     const before = structuredClone(repository.value)
     expect(() =>
       service.saveResource("atlas", { ...mcp, content: "{" })
-    ).toThrow("JSON valide")
+    ).toThrow("valid JSON")
     expect(repository.value).toEqual(before)
     expect(() =>
       service.saveResource("atlas", { ...mcp, content: "[]" })
-    ).toThrow("commande ou une URL")
+    ).toThrow("command or a URL")
   })
   it("requires a name, content and at least one assistant", () => {
     const { service, repository } = setup()
     const item = repository.value.profiles[0]!.resources[0]!
     expect(() =>
       service.saveResource("atlas", { ...item, name: " " })
-    ).toThrow()
-    expect(() =>
-      service.saveResource("atlas", { ...item, content: " " })
     ).toThrow()
     expect(() =>
       service.saveResource("atlas", { ...item, targets: [] })
@@ -98,40 +87,27 @@ describe("Workspace use cases", () => {
   })
   it("does not create a history entry when there are no changes", async () => {
     const { service, repository } = setup()
-    await expect(service.apply("personal")).rejects.toThrow("Aucun changement")
-    expect(repository.value.profiles[2]!.history).toHaveLength(0)
+    await service.discard("atlas")
+    await expect(service.apply("atlas")).rejects.toThrow("No changes")
+    expect(repository.value.profiles[0]!.history).toHaveLength(1)
   })
-  it("duplicates resources independently without copying applied state", async () => {
+  it("merges imports in the sole draft and preserves applied state", async () => {
     const { service, repository } = setup()
-    const source = structuredClone(repository.value.profiles[0]!)
-    await service.createProfile(
-      { name: "Copie", description: "", path: "", color: "blue" },
-      "atlas"
-    )
-    const copy = repository.value.profiles[3]!
-    expect(copy.resources).toEqual(source.resources)
-    expect(copy.applied).toEqual([])
-    expect(copy.history).toEqual([])
-    await service.deleteResource(copy.id, copy.resources[0]!.id)
-    expect(repository.value.profiles[0]).toEqual(source)
-  })
-  it("handles deletion of selected profile and protects the last one", async () => {
-    const { service, repository } = setup()
-    await service.deleteProfile("atlas")
-    expect(repository.value.activeProfileId).toBe("professional")
-    await service.deleteProfile("professional")
-    await expect(service.deleteProfile("personal")).rejects.toThrow(
-      "au moins un profil"
-    )
+    const original = structuredClone(repository.value.profiles[0]!)
+    await service.importProfile({
+      ...original,
+      resources: [
+        { ...original.resources[0]!, content: "Imported instructions" },
+      ],
+    })
     expect(repository.value.profiles).toHaveLength(1)
-  })
-  it("imports duplicates under a new name without replacing data", async () => {
-    const { service, repository } = setup()
-    const original = structuredClone(repository.value.profiles)
-    await service.importProfile(original[0]!)
-    expect(repository.value.profiles.slice(0, 3)).toEqual(original)
-    expect(repository.value.profiles[3]!.name).toBe("Projet Atlas (importé)")
-    expect(repository.value.profiles[3]!.applied).toHaveLength(0)
+    expect(repository.value.profiles[0]!.resources).toHaveLength(
+      original.resources.length
+    )
+    expect(repository.value.profiles[0]!.resources[0]!.content).toBe(
+      "Imported instructions"
+    )
+    expect(repository.value.profiles[0]!.applied).toEqual(original.applied)
   })
   it("can discard additions, removals and modifications together", async () => {
     const { service, repository } = setup()

@@ -27,8 +27,8 @@ const resource = (
         : content,
   enabled: true,
   targets: ["claude", "codex"],
-  scope: "project",
-  source: "Créé dans Agent Switch",
+  scope: "global",
+  source: "Created in Agent Switch",
   ...extra,
 })
 
@@ -36,72 +36,85 @@ export const testResources: Resource[] = [
   resource(
     "instructions-project",
     "instructions",
-    "Conventions du projet",
-    "Architecture, qualité du code et conventions de contribution.",
-    "# Conventions du projet\n\n## Architecture\n\n- Séparer le domaine, les cas d’usage et les adaptateurs.\n- Garder les composants React centrés sur la présentation.\n- Utiliser TypeScript en mode strict.\n\n## Qualité\n\n- Préférer les solutions simples et maintenables.\n- Vérifier le lint et les types avant de terminer.\n- Préserver les modifications existantes.\n\n## Communication\n\nRépondre en français, avec des explications concises.",
-    { source: "AGENTS.md" }
+    "CLAUDE.md",
+    "Architecture, code quality, and contribution conventions.",
+    "# Project conventions\n\n## Architecture\n\n- Separate the domain, use cases, and adapters.\n- Keep React components focused on presentation.\n- Use TypeScript in strict mode.\n\n## Quality\n\n- Prefer simple, maintainable solutions.\n- Check lint and types before finishing.\n- Preserve existing changes.\n\n## Communication\n\nRespond in English with concise explanations.",
+    {
+      source: "~/.claude/CLAUDE.md",
+      targets: ["claude"],
+      instructionRole: "primary",
+    }
   ),
   resource(
     "instructions-git",
     "instructions",
-    "Workflow Git",
-    "Commits lisibles, petites PR et revues structurées.",
-    "# Workflow Git\n\n- Utiliser les Conventional Commits.\n- Garder les pull requests ciblées.\n- Expliquer le problème, la solution et les vérifications.\n- Ne jamais versionner de secrets.",
-    { source: "instructions/git.md" }
+    "git.md",
+    "Readable commits, small PRs, and structured reviews.",
+    "# Git workflow\n\n- Use Conventional Commits.\n- Keep pull requests focused.\n- Explain the problem, solution, and checks.\n- Never commit secrets.",
+    {
+      source: "~/.claude/rules/git.md",
+      targets: ["claude"],
+      instructionRole: "rule",
+    }
   ),
   resource(
     "instructions-personal",
     "instructions",
-    "Préférences personnelles",
-    "Langue, style de réponse et collaboration.",
-    "# Préférences\n\nRéponds en français.\nSois direct et concis.\nExplique tes choix lorsqu’ils aident à comprendre la solution.",
-    { scope: "global", source: "Profil professionnel" }
+    "AGENTS.md",
+    "Language, response style, and collaboration.",
+    "# Preferences\n\nRespond in English.\nBe direct and concise.\nExplain your choices when they help clarify the solution.",
+    {
+      scope: "global",
+      source: "~/.codex/AGENTS.md",
+      targets: ["codex"],
+      instructionRole: "primary",
+    }
   ),
   resource(
     "instructions-tests",
     "instructions",
-    "Stratégie de tests",
-    "Tester les comportements, pas les détails d’implémentation.",
-    "# Tests\n\nTester les cas d’usage et les limites du domaine.\nGarder les tests indépendants du framework UI.",
-    { enabled: false }
+    "Testing strategy",
+    "Test behavior, not implementation details.",
+    "# Tests\n\nTest use cases and domain boundaries.\nKeep tests independent of the UI framework.",
+    { enabled: false, targets: ["claude"], instructionRole: "rule" }
   ),
   resource(
     "skill-frontend",
     "skills",
     "Frontend design",
-    "Construire des interfaces soignées, accessibles et cohérentes.",
-    "# Frontend design\n\nCréer des interfaces adaptées au produit.\nUtiliser les composants shadcn/ui existants.\nVérifier les états vides, les erreurs et les petits écrans.",
-    { source: "Bibliothèque de démonstration" }
+    "Build polished, accessible, and consistent interfaces.",
+    "# Frontend design\n\nCreate interfaces that fit the product.\nUse existing shadcn/ui components.\nCheck empty states, errors, and small screens.",
+    { source: "Demo library" }
   ),
   resource(
     "skill-review",
     "skills",
     "Code review",
-    "Une revue ciblée sur la fiabilité et la maintenabilité.",
-    "# Code review\n\nExaminer les changements de comportement.\nRepérer les régressions et les erreurs aux frontières du système.",
+    "A review focused on reliability and maintainability.",
+    "# Code review\n\nExamine changes in behavior.\nIdentify regressions and errors at system boundaries.",
     { targets: ["claude"] }
   ),
   resource(
     "skill-docs",
     "skills",
     "Documentation",
-    "Rédiger une documentation utile et proche du code.",
-    "# Documentation\n\nDocumenter les décisions et les commandes réellement disponibles.\nInclure des exemples courts.",
+    "Write useful documentation close to the code.",
+    "# Documentation\n\nDocument decisions and the commands actually available.\nInclude short examples.",
     { scope: "global" }
   ),
   resource(
     "skill-security",
     "skills",
     "Security review",
-    "Vérifier les entrées, les permissions et les données sensibles.",
-    "# Security review\n\nValider les entrées externes.\nLimiter les droits au besoin de chaque opération.",
+    "Review inputs, permissions, and sensitive data.",
+    "# Security review\n\nValidate external inputs.\nLimit permissions to what each operation needs.",
     { enabled: false, targets: ["codex"] }
   ),
   resource(
     "mcp-github",
     "mcp",
     "GitHub",
-    "Dépôts, issues et pull requests au même endroit.",
+    "Repositories, issues, and pull requests in one place.",
     JSON.stringify(
       {
         command: "npx",
@@ -111,13 +124,13 @@ export const testResources: Resource[] = [
       null,
       2
     ),
-    { source: "Configuration importée (démo)" }
+    { source: "Imported configuration (demo)" }
   ),
   resource(
     "mcp-context",
     "mcp",
     "Context7",
-    "La documentation des bibliothèques, à portée de l’assistant.",
+    "Library documentation within your assistant’s reach.",
     JSON.stringify(
       { command: "npx", args: ["-y", "@upstash/context7-mcp"] },
       null,
@@ -128,7 +141,7 @@ export const testResources: Resource[] = [
     "mcp-browser",
     "mcp",
     "Playwright",
-    "Inspecter et vérifier les interfaces dans le navigateur.",
+    "Inspect and verify interfaces in the browser.",
     JSON.stringify(
       { command: "npx", args: ["-y", "@playwright/mcp@latest"] },
       null,
@@ -139,16 +152,16 @@ export const testResources: Resource[] = [
   resource(
     "hook-format",
     "hooks",
-    "Formater après modification",
-    "PostToolUse · Appliquer les conventions de formatage.",
+    "Format after editing",
+    "PostToolUse · Apply formatting conventions.",
     "pnpm format",
     { targets: ["claude"], source: "PostToolUse" }
   ),
   resource(
     "hook-check",
     "hooks",
-    "Vérifier en fin de tâche",
-    "Stop · Contrôler les types avant de terminer.",
+    "Check at task completion",
+    "Stop · Check types before finishing.",
     "pnpm typecheck",
     { targets: ["claude"], source: "Stop" }
   ),
@@ -157,81 +170,40 @@ export const testResources: Resource[] = [
 export function createTestWorkspace(): Workspace {
   const applied = structuredClone(testResources)
   const draft = structuredClone(applied)
-  draft[0]!.content +=
-    "\n\n## Interface\n\nPrivilégier une UI compacte et accessible."
+  draft[0]!.content += "\n\n## Interface\n\nPrefer a compact and accessible UI."
   draft.find((item) => item.id === "mcp-context")!.enabled = false
   draft.push(
     resource(
       "skill-hexagonal",
       "skills",
-      "Architecture hexagonale",
-      "Isoler le métier derrière des ports et des adaptateurs.",
-      "# Architecture hexagonale\n\nLe domaine ne dépend d’aucun framework.\nLes ports décrivent les besoins des cas d’usage.\nLes adaptateurs implémentent les entrées et sorties."
+      "Hexagonal architecture",
+      "Isolate business logic behind ports and adapters.",
+      "# Hexagonal architecture\n\nThe domain does not depend on any framework.\nPorts describe use case requirements.\nAdapters implement inputs and outputs."
     )
   )
   const history = [
     {
       id: "revision-initial",
       date: "2026-10-02T09:30:00.000Z",
-      label: "Configuration initiale",
+      label: "Initial configuration",
       count: applied.length,
       resources: structuredClone(applied),
     },
   ]
   const atlas: Profile = {
     id: "atlas",
-    name: "Projet Atlas",
-    description: "L’environnement de travail du projet Atlas.",
-    path: "~/projects/atlas",
+    name: "Atlas project",
+    description: "The Atlas project workspace.",
+    path: "",
     color: "violet",
     resources: draft,
     applied,
     history,
   }
-  const personal = structuredClone(
-    testResources.filter((item) =>
-      ["instructions-personal", "skill-frontend", "mcp-github"].includes(
-        item.id
-      )
-    )
-  )
-  const pro = structuredClone(
-    testResources.filter((item) =>
-      [
-        "instructions-personal",
-        "instructions-git",
-        "skill-review",
-        "mcp-github",
-        "mcp-context",
-      ].includes(item.id)
-    )
-  )
   return {
     version: 1,
     activeProfileId: "atlas",
     theme: "dark",
-    profiles: [
-      atlas,
-      {
-        id: "professional",
-        name: "Professionnel",
-        description: "Mes conventions et outils pour le travail.",
-        path: "",
-        color: "blue",
-        resources: pro,
-        applied: structuredClone(pro),
-        history: [],
-      },
-      {
-        id: "personal",
-        name: "Personnel",
-        description: "Un espace pour explorer et expérimenter.",
-        path: "",
-        color: "amber",
-        resources: personal,
-        applied: structuredClone(personal),
-        history: [],
-      },
-    ],
+    profiles: [atlas],
   }
 }

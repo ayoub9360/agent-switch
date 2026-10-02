@@ -12,7 +12,7 @@ const payload = () => ({
 describe("Browser boundaries", () => {
   it("decodes portable profile data without importing history or identifiers", () => {
     const decoded = transfer.decode(JSON.stringify(payload()))
-    expect(decoded.name).toBe("Projet Atlas")
+    expect(decoded.name).toBe("Atlas project")
     expect(decoded).not.toHaveProperty("history")
     expect(decoded).not.toHaveProperty("applied")
     expect(decoded).not.toHaveProperty("id")

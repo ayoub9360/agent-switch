@@ -1,7 +1,7 @@
 # Agent Switch
 
 Gestionnaire local de configurations Claude Code et Codex : instructions, skills,
-serveurs MCP, hooks et profils. L’interface lit les fichiers de la machine qui
+serveurs MCP et hooks. L’interface lit les fichiers de la machine qui
 héberge le service, et non ceux de l’ordinateur qui ouvre le navigateur.
 
 ## Démarrer
@@ -53,25 +53,51 @@ La copie automatique dans le presse-papiers nécessite HTTPS ou localhost.
 
 ## Configurations prises en charge
 
-Au premier démarrage, les profils sont construits depuis les fichiers existants.
-Aucun profil d’exemple n’est chargé et aucun fichier d’assistant n’est écrit lors
-de cette détection. Les projets présents dans `~/projects`, référencés dans les
-configurations natives, ou ajoutés via l’import sont inspectés.
+Au premier démarrage, la configuration est construite à partir de la configuration globale
+existante. Les dossiers et les configurations des dépôts ne sont ni détectés ni
+gérés. Les éventuelles entrées `projects` des documents natifs sont conservées.
 
-| Type         | Claude Code                                                                      | Codex                                                     |
-| ------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Instructions | `~/.claude/CLAUDE.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `.claude/rules/**/*.md` | `~/.codex/AGENTS.md`, `AGENTS.md`, `AGENTS.override.md`   |
-| Skills       | `.claude/skills/**/SKILL.md`                                                     | `.agents/skills/**/SKILL.md`, `.codex/skills/**/SKILL.md` |
-| MCP          | `~/.claude.json`, ses entrées de projet et `.mcp.json`                           | Table `mcp_servers` de `config.toml`                      |
-| Hooks        | Clé `hooks` de `settings.json` et `settings.local.json`                          | Table `hooks` de `config.toml` et `.codex/hooks.json`     |
+| Type         | Claude Code                                      | Codex                                                            |
+| ------------ | ------------------------------------------------ | ---------------------------------------------------------------- |
+| Instructions | `~/.claude/CLAUDE.md`, `~/.claude/rules/**/*.md` | `~/.codex/AGENTS.md`, `~/.codex/AGENTS.override.md`              |
+| Skills       | `~/.claude/skills/**/SKILL.md`                   | `~/.agents/skills/**/SKILL.md`, `~/.codex/skills/**/SKILL.md`    |
+| MCP          | `mcpServers` à la racine de `~/.claude.json`     | Table `mcp_servers` de `~/.codex/config.toml`                    |
+| Hooks        | Clé `hooks` de `~/.claude/settings.json`         | Table `hooks` de `~/.codex/config.toml` et `~/.codex/hooks.json` |
 
-Les fichiers globaux et de projet sont distincts. Les profils affichent les
-configurations présentes, sans prétendre reproduire toutes les règles de priorité
-et d’approbation des assistants. Les configurations administrateur hors du compte,
-les contenus des plugins ne sont pas gérés.
-Les erreurs de lecture sont visibles dans Réglages. Les liens de fichiers vers une
-cible dans le compte sont conservés ; les liens de dossiers de skills sont signalés
-et ne sont pas parcourus. Les écritures sont limitées au dossier utilisateur.
+Agent Switch gère une seule configuration globale. Il n’y a ni création, ni
+sélection, ni duplication de profils. Les anciens profils sont archivés dans
+`~/.agent-switch/backups/before-single-configuration-*.json` ; la configuration
+sélectionnée et son brouillon sont conservés, sans écrire dans les assistants.
+Le conteneur `profiles` reste interne au format v1 et contient exactement une entrée.
+
+Un skill est une ressource globale : sa fiche permet de choisir tous les assistants,
+un seul ou aucun. Agent Switch synchronise son contenu et ses fichiers avec les
+assistants choisis. Les copies identiques détectées chez plusieurs assistants sont
+regroupées ; les versions différentes restent séparées avec un avertissement.
+Les emplacements d’origine sont conservés en interne, sans définir l’identité visible du skill.
+`agents/openai.yaml` est conservé dans les données globales et distribué uniquement
+à Codex. Les autres fichiers (scripts, références, assets et fichiers auxiliaires)
+sont partagés. Les anciennes copies de ce YAML chez Claude sont retirées avec
+sauvegarde lors de la prochaine application d’un changement sur le skill.
+
+Désactiver un skill puis appliquer déplace son dossier complet dans
+`~/.agent-switch/disabled-skills/<identifiant-emplacement>/`. Il reste visible et
+modifiable dans la bibliothèque. Réactiver puis appliquer restaure le dossier à son
+emplacement initial. Fichiers annexes, permissions, dossiers vides et liens sont
+conservés. Les skills retirés de la configuration sont également mis de côté.
+Un conflit avec un dossier existant bloque la restauration sans l’écraser.
+Les déplacements font partie de la transaction récupérable au redémarrage.
+
+La migration archive l’ancien état dans `~/.agent-switch/backups/before-global-only-*.json`
+avant de retirer les anciens profils de dépôts de l’interface. Aucun fichier de
+ces dépôts n’est modifié. Les exports de profils de projet sont refusés ; les
+champs de compatibilité du format v1 restent fixés à `path: ""` et `scope: "global"`.
+
+Les configurations administrateur hors du compte et les contenus des plugins ne
+sont pas gérés. Les erreurs de lecture sont visibles dans Paramètres. Les liens
+de fichiers vers une cible dans le compte sont conservés, même si leur cible est
+dans un dépôt ; les liens de dossiers de skills sont signalés et non parcourus.
+Les écritures sont limitées au dossier utilisateur.
 
 Les hooks sont édités dans leur format JSON natif (événements et groupes de
 handlers). Agent Switch les configure ; leur exécution appartient à l’assistant.
@@ -84,13 +110,35 @@ L’export inclut leurs fichiers associés, y compris les fichiers binaires et l
 permissions d’exécution. Les scripts externes référencés par les hooks et les
 paquets des serveurs MCP ne sont pas embarqués.
 
-## Brouillons, sauvegardes et profils
+## Instructions par assistant
+
+La page Instructions présente un onglet Claude Code et un onglet Codex. Chaque
+assistant garde ses propres fichiers. Le fichier principal est `CLAUDE.md` pour
+Claude et `AGENTS.md` pour Codex, sous leurs répertoires configurés (y compris
+`CLAUDE_CONFIG_DIR` et `CODEX_HOME`). Les règles Claude et les overrides Codex
+existants apparaissent séparément. Un override Codex non vide remplace le fichier
+principal ; l’interface distingue son état sur disque du brouillon.
+
+L’éditeur propose une édition Markdown et un aperçu. Les fichiers principaux
+n’ont ni nom libre, ni sélecteur de fournisseurs, ni interrupteur d’activation.
+Les liens symboliques restent en place, avec leur cible visible dans les détails.
+Un fichier manquant est créé au bon emplacement après revue et application.
+
+« Copy to… » permet d’ajouter le contenu à la fin des instructions de l’autre
+assistant ou de le remplacer. Le résultat est comparé au texte existant et reste
+modifiable avant d’être enregistré comme brouillon. Cette copie ne crée aucune
+synchronisation permanente. Les imports, chemins et commandes propres à un assistant
+ne sont pas convertis automatiquement. Les règles supplémentaires de Claude sont
+créées dans `rules/` ; un override existant peut être vidé ou retiré pour rétablir
+les instructions principales de Codex.
+
+## Brouillons et sauvegardes
 
 - Les éditions sont enregistrées dans `~/.agent-switch/workspace.json`, avec des
   permissions privées. Les anciens brouillons de démonstration du navigateur ne
   sont jamais importés dans la configuration réelle.
-- Sélectionner un profil ne l’applique pas. La revue montre les différences et les
-  chemins qui seront écrits ou supprimés avant « Appliquer sur la machine ».
+- Les éditions restent des brouillons jusqu’à « Appliquer sur la machine ».
+  La commande `plan` expose les écritures, suppressions et déplacements prévus.
 - Les écritures utilisent des fichiers temporaires et des renommages atomiques.
   Les réglages voisins des documents JSON/TOML sont conservés. La mise en forme et
   les commentaires TOML peuvent être normalisés lors de la sérialisation.
@@ -101,19 +149,19 @@ paquets des serveurs MCP ne sont pas embarqués.
   une modification externe ou un état périmé d’une autre session.
 - « Actualiser depuis le disque » relit les configurations et conserve les brouillons.
   Relire après un conflit permet de comparer le brouillon à la nouvelle version disque.
-- L’historique garde 30 révisions par profil, avec un point de restauration avant
+- L’historique garde 30 révisions, avec un point de restauration avant
   sa première application. Restaurer prépare un brouillon, à appliquer explicitement.
-- Supprimer un profil ne supprime pas ses fichiers. Désactiver une ressource retire
-  son entrée ou son fichier principal ; les fichiers auxiliaires d’un skill restent
-  disponibles pour sa réactivation. Pour un fichier lié, c’est la cible qui est sauvegardée
-  et modifiée ; le lien reste en place.
-- Un emplacement natif ne peut pas être ciblé par deux ressources activées d’un même
-  profil. Pour Codex, éditer l’instruction AGENTS.md existante plutôt qu’en ajouter
-  une deuxième sur la même portée.
+- Désactiver un skill déplace son dossier complet. Pour les autres ressources,
+  la désactivation retire l’entrée native ou le fichier principal. Pour un fichier
+  lié, sa cible est sauvegardée et modifiée ; le lien reste en place.
+- Un emplacement natif ne peut pas être ciblé par deux ressources activées.
+  Pour Codex, modifier l’instruction AGENTS.md existante plutôt qu’en ajouter une deuxième.
 
-L’import depuis la machine crée un instantané fidèle sans modifier les fichiers.
-L’import JSON crée un profil indépendant à appliquer après revue ; adapter son
-chemin de projet à la nouvelle machine (un chemin hors du compte est vidé à l’import). Un export peut contenir les secrets présents
+L’import depuis la machine ajoute les éléments détectés manquants et conserve les brouillons.
+L’import JSON fusionne les éléments dans le brouillon global, à appliquer après revue.
+Les éléments de même nom, type et assistants (même nom pour les skills) sont mis à jour.
+
+Un export peut contenir les secrets présents
 dans les configurations. La limite d’import est de 20 Mo ; chaque fichier de skill
 est limité à 5 Mo. Les sauvegardes disque ne sont pas supprimées automatiquement.
 
@@ -124,33 +172,27 @@ l’adresse du service dans `~/.agent-switch/endpoint.json` ; `--url` la remplac
 
 ```bash
 pnpm cli help
-pnpm cli profiles
 pnpm cli workspace --json
 pnpm cli scan
 pnpm cli refresh
 pnpm cli import-machine --input ./configuration.json
-pnpm cli plan --profile machine
-pnpm cli apply --profile machine
-pnpm cli export --profile machine --output ./profil.json
-pnpm cli import --file ./profil.json
+pnpm cli plan
+pnpm cli apply
+pnpm cli export --output ./configuration.json
+pnpm cli import --file ./configuration.json
 pnpm cli mcp-test --file ./serveur.json
-pnpm cli run createProfile --input ./arguments.json
+pnpm cli run deleteResource --input ./arguments.json
 ```
 
-`run` expose `selectProfile`, `setTheme`, `createProfile`, `editProfile`,
-`deleteProfile`, `createResource`, `saveResource`, `deleteResource`, `discard` et
-`restore`. Son fichier contient un tableau d’arguments. Par exemple :
+`run` expose `setTheme`, `createResource`, `saveResource`, `deleteResource`, `saveInstruction`, `copyInstructions`,
+`discard` et `restore`. Son fichier contient les arguments de la méthode sans
+identifiant de profil. Par exemple, pour `deleteResource` :
 
 ```json
-[
-  {
-    "name": "Travail",
-    "description": "Mon profil",
-    "path": "",
-    "color": "blue"
-  }
-]
+["identifiant-de-la-ressource"]
 ```
+
+Pour `import-machine`, le fichier contient `{"targets":["claude","codex"]}`.
 
 Pour travailler sans interface graphique, démarrer uniquement l’API :
 `pnpm --filter @agent-switch/server exec tsx src/main.ts`.
@@ -190,3 +232,11 @@ Formats natifs : [configuration Codex](https://learn.chatgpt.com/docs/config-fil
 [skills Codex](https://learn.chatgpt.com/docs/build-skills),
 [réglages Claude Code](https://code.claude.com/docs/en/settings),
 [MCP Claude Code](https://code.claude.com/docs/en/mcp).
+
+Exemples de tableaux d’arguments CLI pour les instructions :
+
+- `saveInstruction` : `["claude", "# Mes instructions"]` (fichier principal) ou
+  `["codex", "# Override modifié", "identifiant-du-fichier"]` (fichier existant).
+- `copyInstructions` : `["identifiant-source", "codex", "append"]` ou `"replace"`
+  comme troisième argument ; un quatrième argument facultatif remplace le résultat
+  par un texte adapté manuellement. Ces commandes enregistrent un brouillon.

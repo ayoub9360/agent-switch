@@ -36,7 +36,7 @@ export function ReviewDialog({
           setPlanError(
             error instanceof Error
               ? error.message
-              : "Impossible de préparer l’application."
+              : "Unable to prepare changes for application."
           )
       }
     )
@@ -47,15 +47,15 @@ export function ReviewDialog({
   return (
     <Modal
       wide
-      title="Vérifier les changements"
-      description={`${profile.name} · ${changes.length} changement${changes.length > 1 ? "s" : ""} · tous les assistants`}
+      title="Review changes"
+      description={`${changes.length} change${changes.length !== 1 ? "s" : ""} · all assistants`}
       onClose={onClose}
     >
       <div className="information-banner">
         <ShieldCheck size={16} />
         <span>
-          Les fichiers de la machine seront modifiés. Une sauvegarde est créée
-          avant chaque application.
+          Files on this machine will be modified. A backup is created before
+          each application.
         </span>
       </div>
       {planError && (
@@ -70,7 +70,7 @@ export function ReviewDialog({
               <FileCode2 size={14} />
               <code>{file.path}</code>
               <Pill tone={file.action === "delete" ? "amber" : "green"}>
-                {file.action === "delete" ? "Supprimer" : "Écrire"}
+                {file.action === "delete" ? "Delete" : "Write"}
               </Pill>
             </div>
           ))}
@@ -85,10 +85,10 @@ export function ReviewDialog({
                 <strong>{change.name}</strong>
                 <Pill tone={change.type === "added" ? "green" : "amber"}>
                   {change.type === "added"
-                    ? "Ajout"
+                    ? "Addition"
                     : change.type === "removed"
-                      ? "Suppression"
-                      : "Modification"}
+                      ? "Removal"
+                      : "Change"}
                 </Pill>
               </div>
               {change.before && (
@@ -106,7 +106,7 @@ export function ReviewDialog({
               {change.before?.content !== change.after?.content && (
                 <>
                   <div className="diff-label">
-                    Contenu {change.type === "updated" && "· avant / après"}
+                    Content {change.type === "updated" && "· before / after"}
                   </div>
                   {change.before && (
                     <pre className="diff-code removed">
@@ -126,13 +126,13 @@ export function ReviewDialog({
       ) : (
         <EmptyState
           icon={Check}
-          title="Tout est à jour"
-          description="Il n’y a aucun changement à appliquer."
+          title="Everything is up to date"
+          description="There are no changes to apply."
         />
       )}
       {discard && (
         <div className="discard-confirm">
-          <p>Abandonner tous les brouillons de ce profil ?</p>
+          <p>Discard all drafts for this configuration?</p>
           <Button
             size="sm"
             variant="destructive"
@@ -141,17 +141,17 @@ export function ReviewDialog({
               void controller
                 .run(
                   () => controller.service.discard(profile.id),
-                  "Brouillons abandonnés."
+                  "Drafts discarded."
                 )
                 .then((ok) => {
                   if (ok) onClose()
                 })
             }}
           >
-            Confirmer l’abandon
+            Confirm discard
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setDiscard(false)}>
-            Conserver
+            Keep
           </Button>
         </div>
       )}
@@ -163,11 +163,11 @@ export function ReviewDialog({
           onClick={() => setDiscard(true)}
         >
           <RotateCcw size={13} />
-          Abandonner
+          Discard
         </Button>
         <span />
         <Button variant="outline" onClick={onClose}>
-          Fermer
+          Close
         </Button>
         <Button
           disabled={!changes.length || busy || !plan || !!planError}
@@ -175,14 +175,14 @@ export function ReviewDialog({
             void controller
               .run(
                 () => controller.service.apply(profile.id),
-                "Configuration appliquée sur la machine. Sauvegarde créée."
+                "Configuration applied on this machine. Backup created."
               )
               .then((ok) => {
                 if (ok) onClose()
               })
           }}
         >
-          Appliquer sur la machine <ArrowRight size={14} />
+          Apply to this machine <ArrowRight size={14} />
         </Button>
       </div>
     </Modal>

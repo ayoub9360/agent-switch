@@ -13,7 +13,7 @@ try {
   const pid = Number(await readFile(lock, "utf8"))
   try {
     process.kill(pid, 0)
-    throw new Error("Un service Agent Switch utilise déjà ce dossier.")
+    throw new Error("An Agent Switch service is already using this folder.")
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error
     await rm(lock)
@@ -54,7 +54,7 @@ try {
     { mode: 0o600 }
   )
   server.listen(port, host, () =>
-    console.log(`Agent Switch disponible sur http://${host}:${port}`)
+    console.log(`Agent Switch available at http://${host}:${port}`)
   )
   server.on("error", async (error) => {
     console.error(error.message)

@@ -12,12 +12,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@agent-switch/core": "workspace:*",
     "@agent-switch/ui": "workspace:*",
     "lucide-react": "^1.49.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "zod": "^4.6.5",
-    "@agent-switch/core": "workspace:*"
+    "react-markdown": "^10.1.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

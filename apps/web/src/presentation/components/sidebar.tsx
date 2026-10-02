@@ -1,34 +1,22 @@
-import {
-  ArrowLeftRight,
-  Folder,
-  Plus,
-  Search,
-  PanelLeftClose,
-} from "lucide-react"
+import { ArrowLeftRight, Search, PanelLeftClose } from "lucide-react"
 import { Button } from "@agent-switch/ui/components/button"
 import { cn } from "@agent-switch/ui/lib/utils"
-import type { Profile, Workspace } from "@/domain/workspace"
+import type { Profile } from "@/domain/workspace"
 import { kinds, sections, type Page } from "../config"
 import { AssistantLogo } from "./primitives"
 
 interface Props {
-  workspace: Workspace
   profile: Profile
   page: Page
   mobileOpen: boolean
   navigate: (page: Page) => void
-  selectProfile: (id: string) => void
-  createProfile: () => void
   search: () => void
   close: () => void
 }
 export function Sidebar({
-  workspace,
   profile,
   page,
   navigate,
-  selectProfile,
-  createProfile,
   search,
   close,
   mobileOpen,
@@ -38,7 +26,7 @@ export function Sidebar({
       {mobileOpen && (
         <button
           className="sidebar-backdrop"
-          aria-label="Fermer le menu"
+          aria-label="Close menu"
           onClick={close}
         />
       )}
@@ -50,7 +38,7 @@ export function Sidebar({
           <span>Agent Switch</span>
           <button
             className="mobile-close icon-button"
-            aria-label="Fermer le menu"
+            aria-label="Close menu"
             onClick={close}
           >
             <PanelLeftClose size={17} />
@@ -58,11 +46,11 @@ export function Sidebar({
         </div>
         <button className="sidebar-search" onClick={search}>
           <Search size={14} />
-          <span>Rechercher…</span>
+          <span>Search…</span>
           <kbd>⌘ K</kbd>
         </button>
-        <div className="nav-label">ESPACE DE TRAVAIL</div>
-        <nav aria-label="Navigation principale">
+        <div className="nav-label">WORKSPACE</div>
+        <nav aria-label="Main navigation">
           {(["overview", ...kinds] as Page[]).map((key) => {
             const { icon: Icon, label } = sections[key]
             const count = profile.resources.filter(
@@ -83,36 +71,6 @@ export function Sidebar({
             )
           })}
         </nav>
-        <div className="nav-label profiles-label">
-          <span>MES PROFILS</span>
-          <button
-            className="icon-button"
-            aria-label="Créer un profil"
-            onClick={createProfile}
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-        <div className="profile-nav">
-          {workspace.profiles.map((item) => (
-            <button
-              key={item.id}
-              className={cn(
-                "profile-item",
-                item.id === profile.id && "selected"
-              )}
-              onClick={() => selectProfile(item.id)}
-              aria-pressed={item.id === profile.id}
-            >
-              <span className={cn("profile-dot", item.color)} />
-              <span>{item.name}</span>
-              {item.path && <Folder size={12} />}
-            </button>
-          ))}
-          <button className="all-profiles" onClick={() => navigate("profiles")}>
-            Gérer les profils <span>↗</span>
-          </button>
-        </div>
         <div className="sidebar-bottom">
           {(["history", "settings"] as Page[]).map((key) => {
             const { icon: Icon, label } = sections[key]
@@ -145,11 +103,11 @@ export function AssistantFilter({
     <div
       className="assistant-filter"
       role="group"
-      aria-label="Filtrer par assistant"
+      aria-label="Filter by assistant"
     >
       {(
         [
-          ["all", "Tous les assistants"],
+          ["all", "All assistants"],
           ["claude", "Claude Code"],
           ["codex", "Codex"],
         ] as const

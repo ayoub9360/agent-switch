@@ -1,6 +1,7 @@
 import { readdir, stat, realpath, lstat, readlink } from "node:fs/promises"
 import { join, basename, dirname, resolve } from "node:path"
 import { hostname } from "node:os"
+import { isDeepStrictEqual } from "node:util"
 import * as TOML from "@iarna/toml"
 import type {
   Assistant,
@@ -8,8 +9,17 @@ import type {
   Profile,
   Workspace,
 } from "@agent-switch/core/workspace"
+import { instructionRole } from "@agent-switch/core/instructions"
 import { changesFor, validateResource } from "@agent-switch/core/workspace"
 import { read, hash, inside, writablePath } from "./files"
+import { archivedSkill, exists, type DirectoryMove } from "./skill-storage"
+
+import {
+  distributeSkillFile,
+  sharedSkillFiles,
+  retainOpenAiMetadata,
+  OPENAI_SKILL_METADATA,
+} from "./skill-files"
 
 type Document = Record<string, unknown>
 export interface Binding {
@@ -20,6 +30,9 @@ export interface Binding {
   format: "text" | "json" | "toml"
   profilePath?: string
   assetRoot?: string
+  target?: Assistant
+  instructionRole?: Resource["instructionRole"]
+  skillLocations?: { target: Assistant; file: string; assetRoot: string }[]
 }
 export interface Scan {
   workspace: Workspace
@@ -27,12 +40,13 @@ export interface Scan {
   fingerprints: Record<string, string | null>
 }
 export class Plan extends Map<string, Buffer | null> {
+  moves: DirectoryMove[] = []
   modes = new Map<string, number>()
   expected = new Map<string, string | null>()
 }
 export function object(value: unknown): Document {
   if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Un objet de configuration est attendu.")
+    throw new Error("A configuration object is required.")
   return value as Document
 }
 export function parseDocument(text: string, format: Binding["format"]) {
@@ -44,7 +58,7 @@ export class Machine {
     readonly codexHome = join(home, ".codex"),
     readonly claudeHome = join(home, ".claude")
   ) {}
-  async scan(projectPaths: string[] = []): Promise<Scan> {
+  async scan(): Promise<Scan> {
     const bindings: Scan["bindings"] = {},
       fingerprints: Scan["fingerprints"] = {},
       warnings: string[] = []
@@ -61,50 +75,14 @@ export class Machine {
       if (!info?.isSymbolicLink()) return { file }
       const target = await realpath(file)
       if (!inside(this.home, target))
-        throw new Error(`Lien hors du compte utilisateur : ${file}`)
+        throw new Error(`Symlink outside the home directory: ${file}`)
       return { file: target, alias: file, linkTarget: await readlink(file) }
     }
-    const roots = new Set(
-      projectPaths
-        .filter(Boolean)
-        .map((p) => resolve(p.replace(/^~(?=\/)/, this.home)))
-    )
     const claudeFile = join(this.home, ".claude.json")
-    for (const [file, format] of [
-      [join(this.codexHome, "config.toml"), "toml"],
-      [claudeFile, "json"],
-    ] as const) {
-      try {
-        const bytes = await load(file)
-        if (bytes)
-          for (const root of Object.keys(
-            object(parseDocument(bytes.toString(), format).projects ?? {})
-          ))
-            roots.add(root)
-      } catch {
-        warnings.push(`Configuration illisible : ${file}`)
-      }
-    }
-    try {
-      for (const d of await readdir(join(this.home, "projects"), {
-        withFileTypes: true,
-      }))
-        if (d.isDirectory()) roots.add(join(this.home, "projects", d.name))
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
-    }
     const profiles: Profile[] = []
-    for (const root of ["", ...roots]) {
-      if (
-        root &&
-        (!inside(this.home, root) ||
-          !(await stat(root).catch(() => null))?.isDirectory())
-      ) {
-        warnings.push(`Projet inaccessible : ${root}`)
-        continue
-      }
+    {
       const resources: Resource[] = []
-      const scope = root ? "project" : "global"
+      const scope = "global" as const
       const add = async (
         binding: Binding,
         kind: Resource["kind"],
@@ -128,6 +106,12 @@ export class Machine {
           source:
             binding.file + (binding.keys ? `#${binding.keys.join(".")}` : ""),
         }
+        if (kind === "instructions") {
+          resource.instructionRole = binding.instructionRole ?? "rule"
+          resource.instructionPaths = {
+            [target]: binding.alias ?? binding.file,
+          }
+        }
         if (binding.assetRoot) {
           resource.files = {}
           resource.fileModes = {}
@@ -135,7 +119,7 @@ export class Machine {
             for (const entry of await readdir(dir, { withFileTypes: true })) {
               const file = join(dir, entry.name)
               if (entry.isSymbolicLink()) {
-                warnings.push(`Lien de skill ignoré : ${file}`)
+                warnings.push(`Skipped skill symlink: ${file}`)
                 continue
               }
               if (entry.isDirectory()) await walk(file)
@@ -146,23 +130,65 @@ export class Machine {
                 if (bytes && bytes.length <= 5_000_000)
                   resource.files![file.slice(binding.assetRoot!.length + 1)] =
                     bytes.toString("base64")
-                else
-                  throw new Error(`Fichier de skill trop volumineux : ${file}`)
+                else throw new Error(`Skill file too large: ${file}`)
               }
             }
           }
           await walk(binding.assetRoot)
         }
-        bindings[id] = { ...binding, profilePath: root }
+        if (kind === "skills") {
+          binding.skillLocations = [
+            { target, file: binding.file, assetRoot: binding.assetRoot! },
+          ]
+          const same = resources.find(
+            (r) =>
+              r.kind === "skills" &&
+              r.name === name &&
+              r.content === content &&
+              isDeepStrictEqual(
+                sharedSkillFiles(r.files),
+                sharedSkillFiles(resource.files)
+              ) &&
+              isDeepStrictEqual(
+                sharedSkillFiles(r.fileModes),
+                sharedSkillFiles(resource.fileModes)
+              )
+          )
+          if (same) {
+            const previous = bindings[same.id]!
+            // Codex owns these settings; keep them in the global resource even though Claude has no copy.
+            if (target === "codex" || !same.targets.includes("codex"))
+              retainOpenAiMetadata(same, resource)
+            if (!same.targets.includes(target)) same.targets.push(target)
+            previous.skillLocations!.push(...binding.skillLocations)
+            return
+          }
+          if (resources.some((r) => r.kind === "skills" && r.name === name))
+            warnings.push(
+              `Multiple versions of the skill ${name} were found; they are kept separately.`
+            )
+          resource.description =
+            content
+              .match(/^description:\s*(.+)$/m)?.[1]
+              ?.replace(/^["']|["']$/g, "")
+              .slice(0, 500) ?? "Global skill"
+        }
+        bindings[id] = { ...binding, profilePath: "" }
         const shared = resources.find((r) => r.id === id)
         if (shared) {
           if (!shared.targets.includes(target)) shared.targets.push(target)
+          if (kind === "instructions")
+            shared.instructionPaths = {
+              ...shared.instructionPaths,
+              ...resource.instructionPaths,
+            }
         } else resources.push(resource)
       }
       const readTextFile = async (
         file: string,
         target: Assistant,
-        kind: Resource["kind"] = "instructions"
+        kind: Resource["kind"] = "instructions",
+        role: Resource["instructionRole"] = "rule"
       ) => {
         const location = await resolveFile(file)
         const bytes = await load(location.file)
@@ -171,6 +197,7 @@ export class Machine {
             {
               ...location,
               format: "text",
+              ...(kind === "instructions" ? { instructionRole: role } : {}),
               ...(kind === "skills"
                 ? { assetRoot: dirname(location.file) }
                 : {}),
@@ -183,7 +210,7 @@ export class Machine {
       }
       const warn = (error: unknown) => {
         warnings.push(
-          error instanceof Error ? error.message : "Lecture impossible."
+          error instanceof Error ? error.message : "Unable to read."
         )
       }
       const textFile = (...args: Parameters<typeof readTextFile>) =>
@@ -198,7 +225,7 @@ export class Machine {
         try {
           const actual = await realpath(dir)
           if (!inside(this.home, actual)) {
-            warnings.push(`Dossier hors du compte ignoré : ${dir}`)
+            warnings.push(`Skipped folder outside the home directory: ${dir}`)
             return
           }
           for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -213,7 +240,7 @@ export class Machine {
             )
               await textFile(path, target, kind)
             else if (entry.isSymbolicLink())
-              warnings.push(`Lien non géré : ${path}`)
+              warnings.push(`Unsupported symlink: ${path}`)
           }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
@@ -233,7 +260,7 @@ export class Machine {
         try {
           doc = parseDocument(bytes.toString(), format)
         } catch {
-          warnings.push(`Configuration illisible : ${file}`)
+          warnings.push(`Unreadable configuration: ${file}`)
           return
         }
         const get = (keys: string[]) =>
@@ -265,89 +292,62 @@ export class Machine {
       }
       const config = (...args: Parameters<typeof readConfig>) =>
         readConfig(...args).catch(warn)
-      const claude = root ? join(root, ".claude") : this.claudeHome
-      const codex = root ? join(root, ".codex") : this.codexHome
-      try {
-        await textFile(
-          root ? join(root, "CLAUDE.md") : join(claude, "CLAUDE.md"),
-          "claude"
-        )
-        if (root) await textFile(join(claude, "CLAUDE.md"), "claude")
-        await textFile(
-          root ? join(root, "AGENTS.md") : join(codex, "AGENTS.md"),
-          "codex"
-        )
-        await textFile(
-          root
-            ? join(root, "AGENTS.override.md")
-            : join(codex, "AGENTS.override.md"),
-          "codex"
-        )
-        await directory(join(claude, "rules"), "claude", "instructions")
-        await directory(join(claude, "skills"), "claude", "skills")
-        await directory(
-          join(root || this.home, ".agents/skills"),
-          "codex",
-          "skills"
-        )
-        await directory(join(codex, "skills"), "codex", "skills")
-        await config(
-          join(codex, "hooks.json"),
-          "json",
-          "codex",
-          ["mcpServers"],
-          ["hooks"]
-        )
-        await config(
-          join(codex, "config.toml"),
-          "toml",
-          "codex",
-          ["mcp_servers"],
-          ["hooks"]
-        )
-        await config(
-          join(claude, "settings.json"),
-          "json",
-          "claude",
-          ["mcpServers"],
-          ["hooks"]
-        )
-        if (root)
-          await config(
-            join(claude, "settings.local.json"),
-            "json",
-            "claude",
-            ["mcpServers"],
-            ["hooks"]
-          )
-        await config(
-          claudeFile,
-          "json",
-          "claude",
-          root ? ["projects", root, "mcpServers"] : ["mcpServers"]
-        )
-        if (root)
-          await config(join(root, ".mcp.json"), "json", "claude", [
-            "mcpServers",
-          ])
-      } catch (error) {
-        warnings.push(
-          `${root || this.home} : ${error instanceof Error ? error.message : "lecture impossible"}`
-        )
-      }
-      if (!root || resources.length || projectPaths.includes(root))
-        profiles.push({
-          id: root ? `project-${hash(root).slice(0, 16)}` : "machine",
-          name: root ? basename(root) : "Configuration de la machine",
-          description: root
-            ? `Configuration du projet ${basename(root)}`
-            : `Configuration locale de ${hostname()}`,
-          path: root,
-          color: root ? "blue" : "violet",
-          resources,
-          applied: structuredClone(resources),
-          history: [],
-        })
+      const claude = this.claudeHome
+      const codex = this.codexHome
+      await textFile(
+        join(claude, "CLAUDE.md"),
+        "claude",
+        "instructions",
+        "primary"
+      )
+      await textFile(
+        join(codex, "AGENTS.md"),
+        "codex",
+        "instructions",
+        "primary"
+      )
+      await textFile(
+        join(codex, "AGENTS.override.md"),
+        "codex",
+        "instructions",
+        "override"
+      )
+      await directory(join(claude, "rules"), "claude", "instructions")
+      await directory(join(claude, "skills"), "claude", "skills")
+      await directory(join(this.home, ".agents/skills"), "codex", "skills")
+      await directory(join(codex, "skills"), "codex", "skills")
+      await config(
+        join(codex, "hooks.json"),
+        "json",
+        "codex",
+        ["mcpServers"],
+        ["hooks"]
+      )
+      await config(
+        join(codex, "config.toml"),
+        "toml",
+        "codex",
+        ["mcp_servers"],
+        ["hooks"]
+      )
+      await config(
+        join(claude, "settings.json"),
+        "json",
+        "claude",
+        ["mcpServers"],
+        ["hooks"]
+      )
+      await config(claudeFile, "json", "claude", ["mcpServers"])
+      profiles.push({
+        id: "machine",
+        name: "Machine configuration",
+        description: `Global configuration for ${hostname()}`,
+        path: "",
+        color: "violet",
+        resources,
+        applied: structuredClone(resources),
+        history: [],
+      })
     }
     return {
       workspace: {
@@ -356,6 +356,7 @@ export class Machine {
         profiles,
         theme: "dark",
         machine: {
+          instructionRoots: { claude: this.claudeHome, codex: this.codexHome },
           hostname: hostname(),
           home: this.home,
           scannedAt: new Date().toISOString(),
@@ -371,11 +372,55 @@ export class Machine {
     profile: Profile,
     bindings: Scan["bindings"]
   ): Binding[] {
+    if (profile.path || resource.scope !== "global")
+      throw new Error("Only global configuration is supported.")
     const old = bindings[resource.id]
+    if (resource.kind === "skills") {
+      const slug =
+        resource.name
+          .toLowerCase()
+          .replace(/[^a-z0-9_-]+/g, "-")
+          .replace(/^-|-$/g, "") || hash(resource.id).slice(0, 24)
+      return resource.targets.flatMap<Binding>((target) => {
+        const locations = old?.skillLocations?.filter(
+          (l) => l.target === target
+        )
+        if (locations?.length)
+          return locations.map((l) => ({
+            file: l.file,
+            assetRoot: l.assetRoot,
+            target,
+            format: "text" as const,
+          }))
+        // Bind legacy discoveries to their original assistant, while allowing new destinations.
+        if (
+          old?.assetRoot &&
+          !old.skillLocations &&
+          (target === "claude"
+            ? inside(this.claudeHome, old.file)
+            : !inside(this.claudeHome, old.file))
+        )
+          return [{ ...old, target }]
+        const assetRoot = join(
+          target === "codex"
+            ? join(this.home, ".agents/skills")
+            : join(this.claudeHome, "skills"),
+          slug
+        )
+        return [
+          {
+            file: join(assetRoot, "SKILL.md"),
+            assetRoot,
+            target,
+            format: "text" as const,
+          },
+        ]
+      })
+    }
     // Source bindings are generated by discovery, never accepted from portable files.
     if (
       old &&
-      (resource.scope === "global" || old.profilePath === profile.path) &&
+      !old.profilePath &&
       resource.source === old.file + (old.keys ? `#${old.keys.join(".")}` : "")
     )
       return [
@@ -383,25 +428,13 @@ export class Machine {
           ? { ...old, keys: [...old.keys!.slice(0, -1), resource.name] }
           : old,
       ]
-    const root = resource.scope === "project" ? profile.path : this.home
-    if (!root)
-      throw new Error(
-        "Renseignez le dossier du profil pour une ressource de projet."
-      )
-    if (!inside(this.home, root))
-      throw new Error("Le projet doit se trouver dans le dossier utilisateur.")
     const slug =
       resource.name
         .toLowerCase()
         .replace(/[^a-z0-9_-]+/g, "-")
         .replace(/^-|-$/g, "") || resource.id
     const destinations: Binding[] = resource.targets.map((target): Binding => {
-      const configDir =
-        resource.scope === "global"
-          ? target === "codex"
-            ? this.codexHome
-            : this.claudeHome
-          : join(root, target === "codex" ? ".codex" : ".claude")
+      const configDir = target === "codex" ? this.codexHome : this.claudeHome
       if (resource.kind === "mcp")
         return target === "codex"
           ? {
@@ -410,10 +443,7 @@ export class Machine {
               keys: ["mcp_servers", resource.name],
             }
           : {
-              file:
-                resource.scope === "global"
-                  ? join(this.home, ".claude.json")
-                  : join(root, ".mcp.json"),
+              file: join(this.home, ".claude.json"),
               format: "json",
               keys: ["mcpServers", resource.name],
             }
@@ -426,22 +456,18 @@ export class Machine {
           format: target === "codex" ? "toml" : "json",
           keys: ["hooks"],
         }
-      if (resource.kind === "skills") {
-        const assetRoot = join(
-          target === "codex"
-            ? join(root, ".agents/skills")
-            : join(configDir, "skills"),
-          slug
-        )
-        return { file: join(assetRoot, "SKILL.md"), assetRoot, format: "text" }
-      }
       return {
         file:
           target === "claude"
-            ? join(configDir, "rules", `${slug}.md`)
-            : resource.scope === "global"
-              ? join(this.codexHome, "AGENTS.md")
-              : join(root, "AGENTS.md"),
+            ? instructionRole(resource) === "primary"
+              ? join(configDir, "CLAUDE.md")
+              : join(configDir, "rules", `${slug.replace(/-md$/, "")}.md`)
+            : join(
+                this.codexHome,
+                instructionRole(resource) === "override"
+                  ? "AGENTS.override.md"
+                  : "AGENTS.md"
+              ),
         format: "text",
       }
     })
@@ -460,56 +486,11 @@ export class Machine {
     })
   }
 
-  /** Read physical slots back into a profile baseline without changing its desired resources. */
-  async baseline(
-    profile: Profile,
-    bindings: Scan["bindings"],
-    plan: Plan = new Plan()
-  ): Promise<Resource[]> {
-    const result: Resource[] = []
-    for (const resource of profile.applied) {
-      const values: { content: string; enabled: boolean }[] = []
-      for (const binding of this.destinations(resource, profile, bindings)) {
-        const bytes = plan.has(binding.file)
-          ? plan.get(binding.file)
-          : await read(binding.file)
-        if (!bytes) continue
-        if (binding.format === "text")
-          values.push({ content: bytes.toString(), enabled: true })
-        else {
-          const doc = parseDocument(bytes.toString(), binding.format)
-          const value = binding.keys!.reduce<unknown>(
-            (node, key) =>
-              node && typeof node === "object"
-                ? (node as Document)[key]
-                : undefined,
-            doc
-          )
-          if (value !== undefined)
-            values.push({
-              content: JSON.stringify(value, null, 2),
-              enabled:
-                typeof value === "object" &&
-                value !== null &&
-                "enabled" in value
-                  ? value.enabled !== false
-                  : true,
-            })
-        }
-      }
-      const changed =
-        values.find(
-          (v) =>
-            v.content !== resource.content || v.enabled !== resource.enabled
-        ) ?? values[0]
-      result.push({ ...resource, ...(changed ?? { enabled: false }) })
-    }
-    return result
-  }
   async plan(
     profile: Profile,
     bindings: Scan["bindings"],
-    fingerprints: Scan["fingerprints"]
+    fingerprints: Scan["fingerprints"],
+    storage = join(this.home, ".agent-switch")
   ): Promise<Plan> {
     const plan: Plan = new Plan(),
       touched = new Set<string>()
@@ -525,7 +506,7 @@ export class Machine {
         (await readlink(binding.alias)) !== binding.linkTarget
       )
         throw new Error(
-          `Le lien a changé : ${binding.alias}. Actualisez la configuration.`
+          `The symlink has changed: ${binding.alias}. Refresh the configuration.`
         )
       await writablePath(this.home, binding.file)
       const original = await read(binding.file)
@@ -536,12 +517,12 @@ export class Machine {
         (original ? hash(original) : null) !== expected
       )
         throw new Error(
-          `Le fichier a changé sur disque : ${binding.file}. Actualisez avant d’appliquer.`
+          `The file has changed on disk: ${binding.file}. Refresh before applying.`
         )
       const identity = binding.file + JSON.stringify(binding.keys ?? [])
       if (value !== null && touched.has(identity))
         throw new Error(
-          `Plusieurs éléments ciblent le même emplacement : ${binding.file}`
+          `Multiple items target the same location: ${binding.file}`
         )
       if (value !== null) touched.add(identity)
       if (binding.format === "text") {
@@ -552,7 +533,7 @@ export class Machine {
           expected === undefined
         )
           throw new Error(
-            `Le fichier existe déjà : ${binding.file}. Modifiez l’élément détecté.`
+            `The file already exists: ${binding.file}. Edit the detected item.`
           )
         plan.set(binding.file, value === null ? null : Buffer.from(value))
         return
@@ -562,18 +543,18 @@ export class Machine {
       let node = doc
       for (const key of binding.keys!.slice(0, -1)) {
         if (["__proto__", "prototype", "constructor"].includes(key))
-          throw new Error("Clé interdite.")
+          throw new Error("Forbidden key.")
         node[key] ??= {}
         node = object(node[key])
       }
       const key = binding.keys!.at(-1)!
       if (["__proto__", "prototype", "constructor"].includes(key))
-        throw new Error("Clé interdite.")
+        throw new Error("Forbidden key.")
       if (value === null) delete node[key]
       else {
         if (node[key] !== undefined && !allowExisting && expected === undefined)
           throw new Error(
-            `La configuration ${key} existe déjà dans ${binding.file}.`
+            `Configuration ${key} already exists in ${binding.file}.`
           )
         node[key] = JSON.parse(value)
       }
@@ -592,12 +573,124 @@ export class Machine {
         const slot = binding.file + JSON.stringify(binding.keys ?? [])
         if (destinations.has(slot))
           throw new Error(
-            `Plusieurs éléments ciblent ${binding.file}. Modifiez l’élément existant ou choisissez un autre assistant.`
+            `Multiple items target ${binding.file}. Edit the existing item or choose another assistant.`
           )
         destinations.add(slot)
       }
     }
-    for (const change of changesFor(profile)) {
+    const changes = changesFor(profile)
+    // Skills are stored as complete directories outside the assistants' discovery roots.
+    const skillSlots = new Map<
+      string,
+      { binding: Binding; before?: Resource; after?: Resource }
+    >()
+    for (const [side, resources] of [
+      ["before", profile.applied],
+      ["after", profile.resources],
+    ] as const)
+      for (const resource of resources.filter((r) => r.kind === "skills"))
+        for (const binding of this.destinations(resource, profile, bindings)) {
+          const slot = skillSlots.get(binding.file) ?? { binding }
+          slot[side] = resource
+          skillSlots.set(binding.file, slot)
+        }
+    for (const { binding, before, after } of skillSlots.values()) {
+      if (
+        !changes.some(
+          (c) =>
+            (before && c.before?.id === before.id) ||
+            (after && c.after?.id === after.id)
+        )
+      )
+        continue
+      const root = binding.assetRoot!
+      const archive = archivedSkill(storage, root)
+      const archived = await exists(archive)
+      const active = await exists(root)
+      if (archived && active)
+        throw new Error(
+          `Skill conflict: both ${root} and its archive exist. Refresh the configuration.`
+        )
+      for (const [file, expected] of Object.entries(fingerprints)) {
+        if (file.startsWith((archived ? archive : root) + "/")) {
+          const bytes = await read(file)
+          plan.expected.set(file, expected)
+          if ((bytes ? hash(bytes) : null) !== expected)
+            throw new Error(
+              `Skill file changed: ${file}. Refresh before applying.`
+            )
+        }
+      }
+      const location = archived
+        ? archive
+        : active
+          ? root
+          : after?.enabled
+            ? root
+            : archive
+      if (after) {
+        validateResource(after)
+        const write = async (name: string, bytes: Buffer, mode?: number) => {
+          const file = resolve(location, name)
+          if (!inside(location, file)) throw new Error("Invalid skill path.")
+          await writablePath(this.home, file)
+          const old = await read(file)
+          const expected = fingerprints[file]
+          if (expected !== undefined && (old ? hash(old) : null) !== expected)
+            throw new Error(`Skill file changed: ${file}`)
+          if (old && !before && !archived)
+            throw new Error(`A skill file already exists: ${file}`)
+          plan.expected.set(file, old ? hash(old) : null)
+          plan.set(file, bytes)
+          if (mode !== undefined) plan.modes.set(file, mode)
+        }
+        // A simple toggle moves the original bytes, including untracked files and links.
+        if (
+          !before ||
+          before.content !== after.content ||
+          !(await exists(join(location, "SKILL.md")))
+        )
+          await write("SKILL.md", Buffer.from(after.content))
+        for (const [name, data] of Object.entries(after.files ?? {}))
+          if (
+            distributeSkillFile(name, binding.target!) &&
+            (!before ||
+              before.files?.[name] !== data ||
+              before.fileModes?.[name] !== after.fileModes?.[name])
+          )
+            await write(
+              name,
+              Buffer.from(data, "base64"),
+              after.fileModes?.[name] ?? 0o600
+            )
+      }
+      // Clean up older complete copies only when applying this skill. The transaction backs up the file.
+      if (after?.enabled && binding.target === "claude") {
+        const metadata = join(location, OPENAI_SKILL_METADATA)
+        await writablePath(this.home, metadata)
+        const bytes = await read(metadata)
+        if (bytes) {
+          plan.expected.set(metadata, hash(bytes))
+          plan.set(metadata, null)
+        }
+      }
+      if (after?.enabled && archived)
+        plan.moves.push({ from: archive, to: root })
+      else if (!after?.enabled && active)
+        plan.moves.push({ from: root, to: archive })
+    }
+    // Remove old slots before writing new slots, including when IDs differ between profiles.
+    for (const change of changes)
+      if (change.before?.enabled && change.before.kind !== "skills") {
+        for (const binding of this.destinations(
+          change.before,
+          profile,
+          bindings
+        ))
+          await patch(binding, null, true)
+      }
+    for (const change of changes) {
+      if ((change.after ?? change.before)?.kind === "skills") continue
       const before = change.before,
         after = change.after
       if (after) validateResource(after)
@@ -609,13 +702,11 @@ export class Machine {
           before.scope !== after.scope)
       )
         throw new Error(
-          "Pour déplacer un élément détecté vers un autre assistant ou une autre portée, créez une copie."
+          "To move a detected item to another assistant or scope, create a copy."
         )
       const previous = before
         ? this.destinations(before, profile, bindings)
         : []
-      for (const binding of previous)
-        if (before!.enabled) await patch(binding, null, true)
       if (after?.enabled)
         for (const binding of this.destinations(after, profile, bindings)) {
           await patch(
@@ -627,31 +718,12 @@ export class Machine {
                 JSON.stringify(p.keys) === JSON.stringify(binding.keys)
             )
           )
-          if (binding.assetRoot)
-            for (const [name, base64] of Object.entries(after.files ?? {})) {
-              const file = resolve(binding.assetRoot, name)
-              if (!inside(binding.assetRoot, file) || file === binding.file)
-                throw new Error("Chemin de fichier de skill invalide.")
-              await writablePath(this.home, file)
-              const bytes = await read(file)
-              plan.expected.set(file, bytes ? hash(bytes) : null)
-              if (bytes && fingerprints[file] === undefined)
-                throw new Error(`Un fichier de skill existe déjà : ${file}`)
-              if (
-                fingerprints[file] !== undefined &&
-                (bytes ? hash(bytes) : null) !== fingerprints[file]
-              )
-                throw new Error(`Fichier de skill modifié : ${file}`)
-              plan.set(file, Buffer.from(base64, "base64"))
-              plan.modes.set(file, after.fileModes?.[name] ?? 0o600)
-            }
         }
-      // Disabling removes SKILL.md; helper files stay intact and remain available for re-enabling.
     }
     for (const [file, bytes] of plan) {
       const old = await read(file)
       if (
-        bytes?.equals(old ?? Buffer.alloc(0)) ||
+        (bytes !== null && old !== null && bytes.equals(old)) ||
         (bytes === null && old === null)
       )
         plan.delete(file)

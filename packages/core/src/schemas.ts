@@ -11,10 +11,17 @@ export const resourceSchema = z.object({
     .array(z.enum(["claude", "codex"]))
     .min(1)
     .max(2),
-  scope: z.enum(["global", "project"]),
+  scope: z.literal("global").default("global"),
   files: z.record(z.string(), z.string().max(7_000_000)).optional(),
   fileModes: z.record(z.string(), z.number().int().min(0).max(511)).optional(),
   source: z.string().max(300),
+  instructionRole: z.enum(["primary", "override", "rule"]).optional(),
+  instructionPaths: z
+    .object({
+      claude: z.string().max(4096).optional(),
+      codex: z.string().max(4096).optional(),
+    })
+    .optional(),
 })
 const resourcesSchema = z
   .array(resourceSchema)
@@ -22,12 +29,12 @@ const resourcesSchema = z
   .refine(
     (resources) =>
       new Set(resources.map((item) => item.id)).size === resources.length,
-    "Les identifiants doivent être uniques."
+    "IDs must be unique."
   )
 export const portableProfileSchema = z.object({
   name: z.string().trim().min(1).max(120),
   description: z.string().max(500),
-  path: z.string().max(500),
+  path: z.literal("").default(""),
   color: z.enum(["violet", "blue", "amber", "green"]),
   resources: resourcesSchema,
 })
@@ -54,11 +61,14 @@ export const workspaceSchema = z
         home: z.string(),
         scannedAt: z.string(),
         warnings: z.array(z.string()),
+        instructionRoots: z
+          .object({ claude: z.string(), codex: z.string() })
+          .optional(),
       })
       .optional(),
     version: z.literal(1),
     activeProfileId: z.string(),
-    profiles: z.array(profileSchema).min(1),
+    profiles: z.array(profileSchema).length(1),
     theme: z.enum(["dark", "light"]),
   })
   .refine(

@@ -20,10 +20,9 @@ export interface ProfileTransfer {
 }
 
 export interface ConfigurationDiscovery {
-  scan(path?: string): Promise<Resource[]>
+  scan(): Promise<Resource[]>
   importDetected(input: {
-    name: string
-    path: string
+    name?: string
     targets: ("claude" | "codex")[]
   }): Promise<Workspace>
   refresh(): Promise<Workspace>

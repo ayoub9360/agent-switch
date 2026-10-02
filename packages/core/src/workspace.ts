@@ -11,10 +11,12 @@ export interface Resource {
   content: string
   enabled: boolean
   targets: Assistant[]
-  scope: "global" | "project"
+  scope: "global"
   files?: Record<string, string>
   fileModes?: Record<string, number>
   source: string
+  instructionRole?: "primary" | "override" | "rule"
+  instructionPaths?: Partial<Record<Assistant, string>>
 }
 
 export interface Revision {
@@ -29,7 +31,7 @@ export interface Profile {
   id: string
   name: string
   description: string
-  path: string
+  path: ""
   color: ProfileColor
   resources: Resource[]
   applied: Resource[]
@@ -45,6 +47,7 @@ export interface Workspace {
     home: string
     scannedAt: string
     warnings: string[]
+    instructionRoots?: { claude: string; codex: string }
   }
   theme: "dark" | "light"
 }
@@ -93,11 +96,13 @@ export function changesFor(profile: Profile): Change[] {
 }
 
 export function validateResource(resource: Resource): void {
-  if (!resource.name.trim()) throw new Error("Donnez un nom à cet élément.")
+  if (resource.scope !== "global")
+    throw new Error("Only global resources are supported.")
+  if (!resource.name.trim()) throw new Error("Give this item a name.")
   if (!resource.targets.length)
-    throw new Error("Sélectionnez au moins un assistant.")
-  if (!resource.content.trim())
-    throw new Error("Le contenu ne peut pas être vide.")
+    throw new Error("Select at least one assistant.")
+  if (resource.kind !== "instructions" && !resource.content.trim())
+    throw new Error("Content cannot be empty.")
   if (resource.kind === "skills") {
     const header = resource.content.match(
       /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/
@@ -106,7 +111,7 @@ export function validateResource(resource: Resource): void {
     try {
       metadata = header ? parseYaml(header[1]!) : null
     } catch {
-      throw new Error("L’en-tête YAML du skill est invalide.")
+      throw new Error("The skill YAML header is invalid.")
     }
     if (
       !metadata ||
@@ -119,7 +124,7 @@ export function validateResource(resource: Resource): void {
       !metadata.description.trim()
     )
       throw new Error(
-        "Un skill doit commencer par un en-tête YAML avec name et description."
+        "A skill must start with a YAML header containing name and description."
       )
   }
   if (resource.kind === "hooks") {
@@ -127,10 +132,10 @@ export function validateResource(resource: Resource): void {
     try {
       value = JSON.parse(resource.content)
     } catch {
-      throw new Error("Les hooks doivent être un objet JSON valide.")
+      throw new Error("Hooks must be a valid JSON object.")
     }
     if (!value || typeof value !== "object" || Array.isArray(value))
-      throw new Error("Les hooks doivent être un objet JSON.")
+      throw new Error("Hooks must be a JSON object.")
     for (const groups of Object.values(value)) {
       if (
         !Array.isArray(groups) ||
@@ -144,9 +149,7 @@ export function validateResource(resource: Resource): void {
             )
         )
       )
-        throw new Error(
-          "Chaque événement doit contenir des groupes de hooks valides."
-        )
+        throw new Error("Each event must contain valid hook groups.")
     }
   }
   if (resource.kind === "mcp") {
@@ -154,7 +157,7 @@ export function validateResource(resource: Resource): void {
     try {
       config = JSON.parse(resource.content)
     } catch {
-      throw new Error("La configuration MCP doit être un JSON valide.")
+      throw new Error("The MCP configuration must be valid JSON.")
     }
     if (
       !config ||
@@ -162,32 +165,30 @@ export function validateResource(resource: Resource): void {
       Array.isArray(config) ||
       !("command" in config || "url" in config)
     ) {
-      throw new Error(
-        "La configuration MCP doit contenir une commande ou une URL."
-      )
+      throw new Error("The MCP configuration must contain a command or a URL.")
     }
     const entry = config as Record<string, unknown>
     if (
       "command" in entry &&
       (typeof entry.command !== "string" || !entry.command.trim())
     )
-      throw new Error("La commande MCP doit être une chaîne non vide.")
+      throw new Error("The MCP command must be a non-empty string.")
     if (
       "url" in entry &&
       (typeof entry.url !== "string" || !/^https?:\/\//.test(entry.url))
     )
-      throw new Error("Une URL MCP HTTP ou HTTPS est attendue.")
+      throw new Error("An HTTP or HTTPS MCP URL is required.")
     if (
       entry.args !== undefined &&
       (!Array.isArray(entry.args) ||
         entry.args.some((arg) => typeof arg !== "string"))
     )
-      throw new Error("Les arguments MCP doivent être une liste de chaînes.")
+      throw new Error("MCP arguments must be a list of strings.")
   }
 }
 
 export function resourceSummary(resource: Resource): string {
-  return `${resource.enabled ? "Activé" : "Désactivé"} · ${resource.targets.map((target) => assistantNames[target]).join(", ")} · ${resource.scope === "global" ? "Global" : "Projet"}`
+  return `${resource.enabled ? "Enabled" : "Disabled"} · ${resource.targets.map((target) => assistantNames[target]).join(", ")}`
 }
 
 export function recordApplication(
@@ -198,14 +199,14 @@ export function recordApplication(
 ): Workspace {
   const next = structuredClone(workspace)
   const profile = next.profiles.find((p) => p.id === profileId)
-  if (!profile) throw new Error("Profil introuvable.")
+  if (!profile) throw new Error("Profile not found.")
   const changes = changesFor(profile)
-  if (!changes.length) throw new Error("Aucun changement à appliquer.")
+  if (!changes.length) throw new Error("No changes to apply.")
   if (!profile.history.length)
     profile.history.push({
       id: `${id}-before`,
       date,
-      label: "Avant la première application",
+      label: "Before the first application",
       count: 0,
       resources: structuredClone(profile.applied),
     })
@@ -213,7 +214,7 @@ export function recordApplication(
   profile.history.unshift({
     id,
     date,
-    label: "Configuration appliquée",
+    label: "Configuration applied",
     count: changes.length,
     resources: structuredClone(profile.resources),
   })

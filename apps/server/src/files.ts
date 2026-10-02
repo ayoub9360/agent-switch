@@ -26,12 +26,12 @@ export function inside(root: string, path: string) {
 }
 export async function writablePath(home: string, path: string) {
   if (!inside(home, path) || resolve(home) === resolve(path))
-    throw new Error("Chemin hors du dossier utilisateur.")
+    throw new Error("Path outside the home directory.")
   let current = resolve(path)
   while (current !== resolve(home)) {
     try {
       if ((await lstat(current)).isSymbolicLink())
-        throw new Error(`Écriture refusée sur un lien symbolique : ${current}`)
+        throw new Error(`Cannot write to a symbolic link: ${current}`)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
     }

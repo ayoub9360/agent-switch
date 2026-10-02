@@ -7,9 +7,9 @@ import {
   ShieldCheck,
 } from "lucide-react"
 import { Button } from "@agent-switch/ui/components/button"
-import { Input } from "@agent-switch/ui/components/input"
 import { Switch } from "@agent-switch/ui/components/switch"
 import type { Assistant, Resource } from "@/domain/workspace"
+import { countLabel } from "../config"
 import { assistantNames } from "@/domain/workspace"
 import { useWorkspace } from "../workspace-context"
 import { AssistantMark, Modal, Pill } from "./primitives"
@@ -20,16 +20,14 @@ export function OnboardingDialog({ onClose }: { onClose: () => void }) {
   const [scanning, setScanning] = useState(false)
   const [resources, setResources] = useState<Resource[]>([])
   const [targets, setTargets] = useState<Assistant[]>(["claude", "codex"])
-  const [path, setPath] = useState("")
-  const [name, setName] = useState("Configuration importée")
   return (
     <Modal
-      title="Retrouvez vos repères"
-      description="Importez les configurations présentes sur la machine qui héberge Agent Switch."
+      title="Bring your configuration together"
+      description="Import configurations from the machine running Agent Switch."
       onClose={onClose}
     >
       <div className="onboarding-steps">
-        {["Détection", "Sélection", "Profil"].map((label, index) => (
+        {["Detection", "Selection", "Confirmation"].map((label, index) => (
           <span className={step >= index ? "active" : ""} key={label}>
             <i>{step > index ? <Check size={12} /> : index + 1}</i>
             {label}
@@ -41,20 +39,12 @@ export function OnboardingDialog({ onClose }: { onClose: () => void }) {
           <span className="onboarding-icon">
             <Search size={28} />
           </span>
-          <h3>Tout commence avec l’existant.</h3>
+          <h3>Start with what you already have.</h3>
           <p>
-            Agent Switch lit les fichiers de vos assistants pour retrouver leurs
-            instructions, skills, MCP et hooks.
+            Agent Switch reads your assistant files to find their instructions,
+            skills, MCP servers, and hooks.
           </p>
-          <Pill tone="violet">Fichiers de la machine</Pill>
-          <label className="field-label">
-            Dossier du projet (facultatif)
-            <Input
-              value={path}
-              onChange={(event) => setPath(event.target.value)}
-              placeholder="Vide pour la configuration globale"
-            />
-          </label>
+          <Pill tone="violet">Files on this machine</Pill>
         </div>
       )}
       {step === 1 && (
@@ -65,15 +55,16 @@ export function OnboardingDialog({ onClose }: { onClose: () => void }) {
               <div>
                 <strong>{assistantNames[assistant]}</strong>
                 <p>
-                  {
+                  {countLabel(
                     resources.filter((item) => item.targets.includes(assistant))
-                      .length
-                  }{" "}
-                  éléments détectés
+                      .length,
+                    "item"
+                  )}{" "}
+                  detected
                 </p>
               </div>
               <Switch
-                aria-label={`Importer ${assistantNames[assistant]}`}
+                aria-label={`Import ${assistantNames[assistant]}`}
                 checked={targets.includes(assistant)}
                 onCheckedChange={(checked) =>
                   setTargets((current) =>
@@ -86,27 +77,18 @@ export function OnboardingDialog({ onClose }: { onClose: () => void }) {
             </div>
           ))}
           <p className="form-hint">
-            Les éléments partagés sont importés une seule fois. Seuls les
-            assistants sélectionnés sont conservés.
+            Shared items are imported only once. Only the selected assistants
+            are kept.
           </p>
         </div>
       )}
       {step === 2 && (
         <>
-          <label className="field-label">
-            Nom de votre profil
-            <Input
-              autoFocus
-              maxLength={120}
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-            />
-          </label>
           <div className="information-banner">
             <ShieldCheck size={16} />
             <span>
-              L’import crée un profil indépendant à partir des fichiers actuels.
-              Aucun fichier n’est modifié.
+              Missing detected items are added to the configuration. Your drafts
+              are preserved. No files are modified.
             </span>
           </div>
         </>
@@ -114,7 +96,7 @@ export function OnboardingDialog({ onClose }: { onClose: () => void }) {
       <div className="dialog-actions">
         {step > 0 && (
           <Button variant="outline" onClick={() => setStep(step - 1)}>
-            Retour
+            Back
           </Button>
         )}
         {step === 0 ? (
@@ -122,7 +104,7 @@ export function OnboardingDialog({ onClose }: { onClose: () => void }) {
             disabled={scanning}
             onClick={() => {
               setScanning(true)
-              void controller.discovery.scan(path).then(
+              void controller.discovery.scan().then(
                 (items) => {
                   setResources(items)
                   setScanning(false)
@@ -140,32 +122,31 @@ export function OnboardingDialog({ onClose }: { onClose: () => void }) {
             ) : (
               <Search size={15} />
             )}{" "}
-            {scanning ? "Détection…" : "Détecter la configuration"}
+            {scanning ? "Detection…" : "Detect configuration"}
           </Button>
         ) : step === 1 ? (
           <Button disabled={!targets.length} onClick={() => setStep(2)}>
-            Continuer <ArrowRight size={14} />
+            Continue <ArrowRight size={14} />
           </Button>
         ) : (
           <Button
-            disabled={!name.trim() || busy}
+            disabled={busy}
             onClick={() => {
               void controller
                 .run(
                   () =>
                     controller.discovery.importDetected({
-                      name: name.trim(),
-                      path,
+                      name: "Global configuration",
                       targets,
                     }),
-                  "Configuration importée."
+                  "Configuration imported."
                 )
                 .then((ok) => {
                   if (ok) onClose()
                 })
             }}
           >
-            Créer mon profil <ArrowRight size={14} />
+            Import configuration <ArrowRight size={14} />
           </Button>
         )}
       </div>

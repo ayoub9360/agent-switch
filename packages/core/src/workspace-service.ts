@@ -4,6 +4,13 @@ import {
   type Resource,
   type Workspace,
 } from "./workspace"
+import {
+  primaryInstruction,
+  primaryInstructionName,
+  instructionCopyContent,
+  type InstructionCopyMode,
+} from "./instructions"
+import type { Assistant } from "./workspace"
 import type { Runtime, WorkspaceRepository } from "./ports"
 
 export class WorkspaceService {
@@ -27,15 +34,8 @@ export class WorkspaceService {
 
   private profile(workspace: Workspace, id: string) {
     const profile = workspace.profiles.find((item) => item.id === id)
-    if (!profile) throw new Error("Ce profil n’existe plus.")
+    if (!profile) throw new Error("This profile no longer exists.")
     return profile
-  }
-
-  selectProfile(id: string) {
-    return this.update((workspace) => {
-      this.profile(workspace, id)
-      workspace.activeProfileId = id
-    })
   }
 
   setTheme(theme: Workspace["theme"]) {
@@ -46,26 +46,6 @@ export class WorkspaceService {
 
   createResource(profileId: string, resource: Omit<Resource, "id">) {
     return this.saveResource(profileId, { ...resource, id: this.runtime.id() })
-  }
-
-  editProfile(
-    id: string,
-    input: Pick<Profile, "name" | "description" | "path" | "color">
-  ) {
-    if (!input.name.trim()) throw new Error("Donnez un nom au profil.")
-    return this.update((workspace) => {
-      if (
-        workspace.profiles.some(
-          (profile) =>
-            profile.id !== id &&
-            profile.name.toLowerCase() === input.name.trim().toLowerCase()
-        )
-      )
-        throw new Error("Un profil porte déjà ce nom.")
-      Object.assign(this.profile(workspace, id), input, {
-        name: input.name.trim(),
-      })
-    })
   }
 
   saveResource(profileId: string, resource: Resource) {
@@ -81,49 +61,102 @@ export class WorkspaceService {
     })
   }
 
+  saveInstruction(
+    profileId: string,
+    assistant: Assistant,
+    content: string,
+    resourceId?: string
+  ) {
+    return this.update((workspace) => {
+      const profile = this.profile(workspace, profileId)
+      const existing = resourceId
+        ? profile.resources.find((r) => r.id === resourceId)
+        : primaryInstruction(profile, assistant)
+      if (
+        resourceId &&
+        (!existing ||
+          existing.kind !== "instructions" ||
+          !existing.targets.includes(assistant))
+      )
+        throw new Error("Instruction file not found for this assistant.")
+      if (existing) {
+        existing.content = content
+        existing.enabled = true
+        validateResource(existing)
+      } else {
+        const resource: Resource = {
+          id: this.runtime.id(),
+          kind: "instructions",
+          name: primaryInstructionName(assistant),
+          description: "",
+          content,
+          enabled: true,
+          targets: [assistant],
+          scope: "global",
+          source: "Created in Agent Switch",
+          instructionRole: "primary",
+        }
+        validateResource(resource)
+        profile.resources.push(resource)
+      }
+    })
+  }
+
+  copyInstructions(
+    profileId: string,
+    sourceId: string,
+    target: Assistant,
+    mode: InstructionCopyMode,
+    editedContent?: string
+  ) {
+    return this.update((workspace) => {
+      if (mode !== "append" && mode !== "replace")
+        throw new Error("Invalid copy mode.")
+      const profile = this.profile(workspace, profileId)
+      const source = profile.resources.find(
+        (r) => r.id === sourceId && r.kind === "instructions"
+      )
+      if (!source) throw new Error("Source instruction file not found.")
+      const destination = primaryInstruction(profile, target)
+      if (
+        source.id === destination?.id ||
+        (destination &&
+          source.source.startsWith("/") &&
+          source.source === destination.source)
+      )
+        throw new Error(
+          "These assistants already share the same instruction file."
+        )
+      const content =
+        editedContent ??
+        instructionCopyContent(destination?.content ?? "", source.content, mode)
+      if (destination) {
+        destination.content = content
+        destination.enabled = true
+        validateResource(destination)
+      } else {
+        const resource: Resource = {
+          id: this.runtime.id(),
+          kind: "instructions",
+          name: primaryInstructionName(target),
+          description: "",
+          content,
+          enabled: true,
+          targets: [target],
+          scope: "global",
+          source: "Copied in Agent Switch",
+          instructionRole: "primary",
+        }
+        validateResource(resource)
+        profile.resources.push(resource)
+      }
+    })
+  }
+
   deleteResource(profileId: string, id: string) {
     return this.update((workspace) => {
       const profile = this.profile(workspace, profileId)
       profile.resources = profile.resources.filter((item) => item.id !== id)
-    })
-  }
-
-  createProfile(
-    input: Pick<Profile, "name" | "description" | "path" | "color">,
-    fromId?: string
-  ) {
-    if (!input.name.trim()) throw new Error("Donnez un nom au profil.")
-    return this.update((workspace) => {
-      if (
-        workspace.profiles.some(
-          (profile) =>
-            profile.name.toLowerCase() === input.name.trim().toLowerCase()
-        )
-      )
-        throw new Error("Un profil porte déjà ce nom.")
-      const source = fromId ? this.profile(workspace, fromId).resources : []
-      const profile: Profile = {
-        ...input,
-        name: input.name.trim(),
-        id: this.runtime.id(),
-        resources: structuredClone(source),
-        applied: [],
-        history: [],
-      }
-      workspace.profiles.push(profile)
-      workspace.activeProfileId = profile.id
-    })
-  }
-
-  deleteProfile(id: string) {
-    return this.update((workspace) => {
-      if (workspace.profiles.length === 1)
-        throw new Error("Conservez au moins un profil.")
-      workspace.profiles = workspace.profiles.filter(
-        (profile) => profile.id !== id
-      )
-      if (workspace.activeProfileId === id)
-        workspace.activeProfileId = workspace.profiles[0]!.id
     })
   }
 
@@ -135,7 +168,7 @@ export class WorkspaceService {
     return this.update((workspace) => {
       const profile = this.profile(workspace, profileId)
       const revision = profile.history.find((item) => item.id === revisionId)
-      if (!revision) throw new Error("Cette sauvegarde n’existe plus.")
+      if (!revision) throw new Error("This backup no longer exists.")
       profile.resources = structuredClone(revision.resources)
     })
   }
@@ -155,23 +188,25 @@ export class WorkspaceService {
   ) {
     input.resources.forEach(validateResource)
     return this.update((workspace) => {
-      let name = input.name
-      while (workspace.profiles.some((profile) => profile.name === name))
-        name += " (importé)"
-      const profile: Profile = {
-        ...structuredClone(input),
-        resources: input.resources.map((resource) => ({
+      const profile = this.profile(workspace, workspace.activeProfileId)
+      for (const resource of input.resources) {
+        const existing = profile.resources.find(
+          (r) =>
+            r.kind === resource.kind &&
+            r.name === resource.name &&
+            (r.kind === "skills" ||
+              [...r.targets].sort().join() ===
+                [...resource.targets].sort().join())
+        )
+        const imported = {
           ...structuredClone(resource),
-          id: this.runtime.id(),
-          source: "Importé dans Agent Switch",
-        })),
-        name,
-        id: this.runtime.id(),
-        applied: [],
-        history: [],
+          id: existing?.id ?? this.runtime.id(),
+          source: existing?.source ?? "Imported into Agent Switch",
+        }
+        delete imported.instructionPaths
+        if (existing) Object.assign(existing, imported)
+        else profile.resources.push(imported)
       }
-      workspace.profiles.push(profile)
-      workspace.activeProfileId = profile.id
     })
   }
 }

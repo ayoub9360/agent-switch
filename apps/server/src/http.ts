@@ -30,7 +30,7 @@ export function createApi(
     for await (const chunk of req) {
       size += chunk.length
       if (size > 25_000_000)
-        throw new Error("Requête trop volumineuse (25 Mo maximum).")
+        throw new Error("Request too large (25 MB maximum).")
       chunks.push(chunk)
     }
     return JSON.parse(Buffer.concat(chunks).toString() || "{}")
@@ -41,16 +41,16 @@ export function createApi(
         const url = new URL(req.url ?? "/", "http://localhost")
         if (!url.pathname.startsWith("/api/")) {
           if (!webDirectory || req.method !== "GET")
-            return send(res, 404, { error: "Route introuvable." })
+            return send(res, 404, { error: "Route not found." })
           let path = resolve(
             webDirectory,
             "." + decodeURIComponent(url.pathname)
           )
           if (!inside(webDirectory, path))
-            return send(res, 403, { error: "Chemin interdit." })
+            return send(res, 403, { error: "Forbidden path." })
           if (!extname(path)) path = resolve(webDirectory, "index.html")
           const bytes = await read(path)
-          if (!bytes) return send(res, 404, { error: "Fichier introuvable." })
+          if (!bytes) return send(res, 404, { error: "File not found." })
           const types: Record<string, string> = {
             ".html": "text/html; charset=utf-8",
             ".js": "text/javascript",
@@ -70,27 +70,23 @@ export function createApi(
         }
         const origin = req.headers.origin
         if (origin && !allowedOrigins.includes(origin))
-          return send(res, 403, { error: "Origine non autorisée." })
+          return send(res, 403, { error: "Unauthorized origin." })
         if (req.headers["x-agent-switch"] !== "1")
-          return send(res, 403, { error: "Client Agent Switch requis." })
+          return send(res, 403, { error: "Agent Switch client required." })
         if (req.method === "GET" && url.pathname === "/api/workspace")
           return send(res, 200, await repository.load())
         if (req.method === "GET" && url.pathname === "/api/discovery")
-          return send(
-            res,
-            200,
-            await repository.discover(url.searchParams.get("path") ?? undefined)
-          )
+          return send(res, 200, await repository.discover())
         if (req.method === "POST" && url.pathname === "/api/mcp/test") {
           const input = await body(req)
           if (typeof input.content !== "string")
-            throw new Error("Configuration manquante.")
+            throw new Error("Missing configuration.")
           return send(res, 200, await testMcp(input.content))
         }
         if (req.headers["if-match"] !== repository.etag())
           return send(res, 409, {
             error:
-              "La configuration a changé dans une autre session. Rechargez la page avant de recommencer.",
+              "The configuration has changed in another session. Reload the page before trying again.",
           })
         if (req.method === "PUT" && url.pathname === "/api/workspace") {
           await repository.save(workspaceSchema.parse(await body(req)))
@@ -112,20 +108,23 @@ export function createApi(
           if (match[2] === "apply")
             return send(res, 200, await repository.apply(id))
           const plan = await repository.preview(id)
-          return send(
-            res,
-            200,
-            [...plan].map(([path, content]) => ({
+          return send(res, 200, [
+            ...plan.moves.map((move) => ({
+              path: move.from,
+              destination: move.to,
+              action: "move",
+            })),
+            ...[...plan].map(([path, content]) => ({
               path,
               action: content === null ? "delete" : "write",
               bytes: content?.length ?? 0,
-            }))
-          )
+            })),
+          ])
         }
-        send(res, 404, { error: "Route introuvable." })
+        send(res, 404, { error: "Route not found." })
       } catch (error) {
         send(res, 400, {
-          error: error instanceof Error ? error.message : "Erreur interne.",
+          error: error instanceof Error ? error.message : "Internal error.",
         })
       }
     }

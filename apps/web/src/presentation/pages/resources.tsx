@@ -23,7 +23,7 @@ import {
   type Resource,
   type ResourceKind,
 } from "@/domain/workspace"
-import { kindSingular, sections } from "../config"
+import { countLabel, kindSingular, sections, savedLabel } from "../config"
 import { useWorkspace } from "../workspace-context"
 import {
   AssistantMark,
@@ -55,10 +55,7 @@ export function ResourcePage({
     onDirtyChange(value)
   }
   const canLeave = () =>
-    !dirty.current ||
-    window.confirm(
-      "Abandonner les modifications non enregistrées dans l’éditeur ?"
-    )
+    !dirty.current || window.confirm("Discard unsaved changes in the editor?")
   const [query, setQuery] = useState("")
   const [enabledOnly, setEnabledOnly] = useState(false)
   const { controller, busy } = useWorkspace()
@@ -78,8 +75,8 @@ export function ResourcePage({
         <div className="search-field">
           <Search size={15} />
           <Input
-            aria-label={`Rechercher dans ${sections[kind].label}`}
-            placeholder={`Rechercher ${kind === "mcp" ? "un serveur" : `une ${kindSingular[kind]}`}…`}
+            aria-label={`Search in ${sections[kind].label}`}
+            placeholder={`Search ${sections[kind].label.toLowerCase()}…`}
             value={query}
             onChange={(event) => {
               if (canLeave()) setQuery(event.target.value)
@@ -94,12 +91,12 @@ export function ResourcePage({
               if (canLeave()) setEnabledOnly(value)
             }}
           />
-          <span>Actifs uniquement</span>
+          <span>Enabled only</span>
         </label>
-        <span className="result-count">{items.length} éléments</span>
+        <span className="result-count">{countLabel(items.length, "item")}</span>
         <Button onClick={openEditor}>
           <Plus size={15} />
-          Ajouter
+          Add
         </Button>
       </div>
       {items.length ? (
@@ -133,18 +130,24 @@ export function ResourcePage({
                     <strong>{resource.name}</strong>
                     <small>{resource.description}</small>
                     <span className="resource-tags">
-                      {resource.targets.map((target) => (
-                        <AssistantMark key={target} assistant={target} />
-                      ))}
-                      <span>
-                        {resource.scope === "global" ? "Global" : "Projet"}
-                      </span>
-                      {kind === "mcp" && <span>Configuré</span>}
+                      {(kind !== "skills" || resource.enabled) &&
+                        resource.targets.map((target) => (
+                          <AssistantMark key={target} assistant={target} />
+                        ))}
+                      {kind === "skills" && !resource.enabled && (
+                        <span>Disabled everywhere</span>
+                      )}
+                      {kind === "mcp" && <span>Configured</span>}
                     </span>
                   </span>
                 </button>
                 <Switch
-                  aria-label={`Activer ${resource.name}`}
+                  aria-label={`Enable ${resource.name}`}
+                  title={
+                    kind === "skills"
+                      ? "When applied, disabling moves the entire folder to ~/.agent-switch; enabling restores it."
+                      : undefined
+                  }
                   checked={resource.enabled}
                   disabled={busy}
                   onCheckedChange={(enabled) => {
@@ -155,7 +158,7 @@ export function ResourcePage({
                           ...resource,
                           enabled,
                         }),
-                      "Brouillon enregistré."
+                      "Draft saved."
                     )
                   }}
                 />
@@ -164,7 +167,12 @@ export function ResourcePage({
           </div>
           {selected && (
             <ResourceDetail
-              key={selected.id + selected.content + selected.enabled}
+              key={
+                selected.id +
+                selected.content +
+                selected.enabled +
+                selected.targets.join()
+              }
               profile={profile}
               resource={selected}
               onDirtyChange={reportDirty}
@@ -176,18 +184,18 @@ export function ResourcePage({
           icon={Icon}
           title={
             query || enabledOnly
-              ? "Aucun résultat"
-              : `Aucun ${kindSingular[kind]}`
+              ? "No results"
+              : `No ${sections[kind].label.toLowerCase()}`
           }
           description={
             query || enabledOnly
-              ? "Essayez une autre recherche ou retirez le filtre."
-              : "Ajoutez votre premier élément à ce profil."
+              ? "Try another search or remove the filter."
+              : "Add your first item to your configuration."
           }
           action={
             <Button variant="outline" onClick={openEditor}>
               <Plus size={15} />
-              Ajouter un élément
+              Add an item
             </Button>
           }
         />
@@ -235,7 +243,9 @@ function ResourceDetail({
             ? "configuration.json"
             : resource.kind === "hooks"
               ? "hooks.json"
-              : "instructions.md"}
+              : resource.kind === "skills"
+                ? "SKILL.md"
+                : "instructions.md"}
         </span>
         <Pill
           tone={
@@ -247,21 +257,21 @@ function ResourceDetail({
           }
         >
           {changed
-            ? "Non enregistré"
+            ? "Unsaved"
             : pending
-              ? "Brouillon"
+              ? "Draft"
               : resource.enabled
-                ? "Actif"
-                : "Désactivé"}
+                ? "Enabled"
+                : "Disabled"}
         </Pill>
       </div>
       <div className="detail-content">
         <label className="field-label">
-          Nom
+          Name
           <Input
             value={draft.name}
             maxLength={120}
-            aria-label="Nom de l’élément"
+            aria-label="Item name"
             onChange={(event) => update({ name: event.target.value })}
           />
         </label>
@@ -276,43 +286,82 @@ function ResourceDetail({
         </label>
         <div className="detail-options">
           <div>
-            <span className="field-label">Assistants</span>
+            <span className="field-label">
+              {resource.kind === "skills" ? "Available to" : "Assistants"}
+            </span>
             <div className="target-options">
+              {resource.kind === "skills" && (
+                <>
+                  <button
+                    type="button"
+                    className={cn(
+                      "target-button",
+                      draft.enabled && draft.targets.length === 2 && "selected"
+                    )}
+                    aria-pressed={draft.enabled && draft.targets.length === 2}
+                    onClick={() =>
+                      update({ targets: ["claude", "codex"], enabled: true })
+                    }
+                  >
+                    All assistants
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "target-button",
+                      !draft.enabled && "selected"
+                    )}
+                    aria-pressed={!draft.enabled}
+                    onClick={() => update({ enabled: false })}
+                  >
+                    None
+                  </button>
+                </>
+              )}
               {(["claude", "codex"] as Assistant[]).map((assistant) => (
                 <button
                   key={assistant}
-                  aria-pressed={draft.targets.includes(assistant)}
+                  aria-pressed={
+                    draft.targets.includes(assistant) &&
+                    (resource.kind !== "skills" || draft.enabled)
+                  }
                   className={cn(
                     "target-button",
-                    draft.targets.includes(assistant) && "selected"
+                    draft.targets.includes(assistant) &&
+                      (resource.kind !== "skills" || draft.enabled) &&
+                      "selected"
                   )}
-                  onClick={() =>
-                    update({
-                      targets: draft.targets.includes(assistant)
+                  onClick={() => {
+                    const active = resource.kind !== "skills" || draft.enabled
+                    const targets =
+                      draft.targets.includes(assistant) && active
                         ? draft.targets.filter((target) => target !== assistant)
-                        : [...draft.targets, assistant],
-                    })
-                  }
+                        : [
+                            ...new Set([
+                              ...draft.targets.filter(() => active),
+                              assistant,
+                            ]),
+                          ]
+                    update(
+                      resource.kind === "skills"
+                        ? {
+                            targets: targets.length ? targets : draft.targets,
+                            enabled: targets.length > 0,
+                          }
+                        : { targets }
+                    )
+                  }}
                 >
                   <AssistantMark assistant={assistant} />
                   {assistantNames[assistant]}
-                  {draft.targets.includes(assistant) && <Check size={12} />}
+                  {draft.targets.includes(assistant) &&
+                    (resource.kind !== "skills" || draft.enabled) && (
+                      <Check size={12} />
+                    )}
                 </button>
               ))}
             </div>
           </div>
-          <label className="field-label">
-            Portée
-            <select
-              value={draft.scope}
-              onChange={(event) =>
-                update({ scope: event.target.value as Resource["scope"] })
-              }
-            >
-              <option value="project">Projet</option>
-              <option value="global">Globale</option>
-            </select>
-          </label>
         </div>
         <div className="editor">
           <div className="editor-toolbar">
@@ -326,25 +375,25 @@ function ResourceDetail({
                   className={cn(preview && "selected")}
                   onClick={() => setPreview(!preview)}
                 >
-                  {preview ? "Éditer" : "Aperçu"}
+                  {preview ? "Edit" : "Preview"}
                 </button>
               )}
               <button
-                aria-label="Copier le contenu"
+                aria-label="Copy content"
                 onClick={() => {
                   if (!navigator.clipboard) {
                     controller.fail(
                       new Error(
-                        "La copie automatique nécessite HTTPS ou localhost. Sélectionnez et copiez le contenu de l’éditeur."
+                        "Automatic copying requires HTTPS or localhost. Select and copy the editor content."
                       )
                     )
                     return
                   }
                   void navigator.clipboard.writeText(draft.content).then(
-                    () => controller.notify("Contenu copié."),
+                    () => controller.notify("Content copied."),
                     () =>
                       controller.fail(
-                        new Error("Le presse-papiers n’est pas accessible.")
+                        new Error("The clipboard is unavailable.")
                       )
                   )
                 }}
@@ -380,7 +429,7 @@ function ResourceDetail({
               </div>
               <textarea
                 spellCheck={false}
-                aria-label="Contenu de l’élément"
+                aria-label="Item content"
                 value={draft.content}
                 maxLength={100_000}
                 onScroll={(event) => {
@@ -396,17 +445,19 @@ function ResourceDetail({
             </div>
           )}
         </div>
-        <div className="detail-source">
-          <Folder size={12} />
-          Origine : {resource.source}
-        </div>
+        {resource.kind !== "skills" && (
+          <div className="detail-source">
+            <Folder size={12} />
+            Source: {savedLabel(resource.source)}
+          </div>
+        )}
         {resource.kind === "mcp" && (
           <div className="connection-test">
             <div>
-              <strong>{tested ? tested : "Tester la configuration"}</strong>
+              <strong>{tested ? tested : "Test configuration"}</strong>
               <p>
-                Le test démarre la commande ou contacte l’URL configurée, puis
-                initialise une connexion MCP.
+                The test runs the command or contacts the configured URL, then
+                initializes an MCP connection.
               </p>
             </div>
             <Button
@@ -419,23 +470,23 @@ function ResourceDetail({
                   .testMcp(draft.content)
                   .then(
                     (result) =>
-                      setTested(`${result.name} ${result.version} · connecté`),
+                      setTested(`${result.name} ${result.version} · connected`),
                     controller.fail
                   )
                   .finally(() => setTesting(false))
               }}
             >
               {testing ? (
-                "Test…"
+                "Testing…"
               ) : tested ? (
                 <>
                   <Check size={13} />
-                  Connecté
+                  Connected
                 </>
               ) : (
                 <>
                   <Play size={13} />
-                  Tester
+                  Test
                 </>
               )}
             </Button>
@@ -446,7 +497,7 @@ function ResourceDetail({
         <Button
           variant="ghost"
           size="icon-sm"
-          aria-label={`Supprimer ${resource.name}`}
+          aria-label={`Delete ${resource.name}`}
           onClick={() => setRemove(true)}
         >
           <Trash2 size={15} />
@@ -454,7 +505,7 @@ function ResourceDetail({
         <span />
         {changed && (
           <Button variant="ghost" size="sm" onClick={() => setDraft(resource)}>
-            Annuler
+            Cancel
           </Button>
         )}
         <Button
@@ -463,23 +514,23 @@ function ResourceDetail({
           onClick={() => {
             void controller.run(
               () => controller.service.saveResource(profile.id, draft),
-              "Modifications enregistrées dans le brouillon."
+              "Changes saved to the draft."
             )
           }}
         >
           <Save size={14} />
-          Enregistrer
+          Save
         </Button>
       </div>
       {remove && (
         <Modal
-          title="Supprimer cet élément ?"
-          description={`${resource.name} sera retiré du brouillon. La configuration appliquée reste disponible dans l’historique.`}
+          title="Delete this item?"
+          description={`${resource.name} will be removed from the draft. The applied configuration remains available in history.`}
           onClose={() => setRemove(false)}
         >
           <div className="dialog-actions">
             <Button variant="outline" onClick={() => setRemove(false)}>
-              Annuler
+              Cancel
             </Button>
             <Button
               variant="destructive"
@@ -488,11 +539,11 @@ function ResourceDetail({
                 void controller.run(
                   () =>
                     controller.service.deleteResource(profile.id, resource.id),
-                  "Élément retiré du brouillon."
+                  "Item removed from the draft."
                 )
               }}
             >
-              Supprimer
+              Delete
             </Button>
           </div>
         </Modal>
@@ -512,26 +563,23 @@ export function CreateResourceDialog({
 }) {
   const { controller, busy } = useWorkspace()
   const [name, setName] = useState("")
+  const [description, setDescription] = useState("")
   const [targets, setTargets] = useState<Assistant[]>(
     kind === "hooks" ? ["claude"] : ["claude", "codex"]
   )
-  const [scope, setScope] = useState<Resource["scope"]>(
-    profile.path ? "project" : "global"
-  )
-  const [description, setDescription] = useState("")
   const [content, setContent] = useState(
     kind === "mcp"
       ? '{\n  "command": "npx",\n  "args": []\n}'
       : kind === "hooks"
         ? '{\n  "PostToolUse": [{"hooks": [{"type": "command", "command": ""}]}]\n}'
         : kind === "skills"
-          ? "---\nname: my-skill\ndescription: Décrivez quand utiliser ce skill.\n---\n\n# Instructions\n"
+          ? "---\nname: my-skill\ndescription: Describe when to use this skill.\n---\n\n# Instructions\n"
           : ""
   )
   return (
     <Modal
-      title={`Ajouter un ${kindSingular[kind]}`}
-      description={`Cet élément sera ajouté au brouillon de ${profile.name}.`}
+      title={`Add ${kind === "instructions" || kind === "mcp" ? "an" : "a"} ${kindSingular[kind]}`}
+      description="This item will be added to the draft."
       onClose={onClose}
     >
       <form
@@ -547,10 +595,10 @@ export function CreateResourceDialog({
                   content,
                   enabled: true,
                   targets,
-                  scope,
-                  source: "Créé dans Agent Switch",
+                  scope: "global",
+                  source: "Created in Agent Switch",
                 }),
-              "Élément ajouté."
+              "Item added."
             )
             .then((ok) => {
               if (ok) onClose()
@@ -558,12 +606,12 @@ export function CreateResourceDialog({
         }}
       >
         <label className="field-label">
-          Nom
+          Name
           <Input
             autoFocus
             required
             maxLength={120}
-            placeholder={kind === "mcp" ? "Mon serveur" : "Nom de l’élément"}
+            placeholder={kind === "mcp" ? "My server" : "Item name"}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
@@ -574,7 +622,7 @@ export function CreateResourceDialog({
             maxLength={500}
             value={description}
             onChange={(event) => setDescription(event.target.value)}
-            placeholder="À quoi sert cet élément ?"
+            placeholder="What is this item for?"
           />
         </label>
         <div className="detail-options">
@@ -604,33 +652,19 @@ export function CreateResourceDialog({
               ))}
             </div>
           </div>
-          <label className="field-label">
-            Portée
-            <select
-              value={scope}
-              onChange={(event) =>
-                setScope(event.target.value as Resource["scope"])
-              }
-            >
-              <option value="global">Globale</option>
-              <option value="project" disabled={!profile.path}>
-                Projet
-              </option>
-            </select>
-          </label>
         </div>
         {kind === "instructions" && (
           <p className="form-hint">
-            Codex utilise AGENTS.md pour chaque portée : modifiez l’instruction
-            existante si elle est déjà présente.
+            Codex uses AGENTS.md: edit the existing instruction if it is already
+            present.
           </p>
         )}
         <label className="field-label">
           {kind === "mcp"
-            ? "Configuration JSON"
+            ? "JSON configuration"
             : kind === "hooks"
-              ? "Configuration des hooks (JSON)"
-              : "Contenu Markdown"}
+              ? "Hook configuration (JSON)"
+              : "Markdown content"}
           <textarea
             className="form-code"
             required
@@ -641,11 +675,11 @@ export function CreateResourceDialog({
         </label>
         <div className="dialog-actions">
           <Button variant="outline" type="button" onClick={onClose}>
-            Annuler
+            Cancel
           </Button>
           <Button disabled={busy} type="submit">
             <Plus size={14} />
-            Ajouter au profil
+            Add to configuration
           </Button>
         </div>
       </form>

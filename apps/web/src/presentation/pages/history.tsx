@@ -2,7 +2,7 @@ import { useState } from "react"
 import { History, RotateCcw, Check, GitCommitHorizontal } from "lucide-react"
 import { Button } from "@agent-switch/ui/components/button"
 import type { Profile, Revision } from "@/domain/workspace"
-import { dateLabel } from "../config"
+import { countLabel, savedLabel, dateLabel } from "../config"
 import { useWorkspace } from "../workspace-context"
 import { EmptyState, Modal, Pill } from "../components/primitives"
 
@@ -22,28 +22,28 @@ export function HistoryPage({ profile }: { profile: Profile }) {
               </div>
               <div className="history-card">
                 <div className="history-card-header">
-                  <h2>{item.label}</h2>
+                  <h2>{savedLabel(item.label)}</h2>
                   {index === 0 && (
                     <Pill tone="green">
                       <Check size={11} />
-                      Dernière application
+                      Last applied
                     </Pill>
                   )}
                   <time>{dateLabel(item.date)}</time>
                 </div>
                 <p>
-                  {item.count} changements · {item.resources.length} éléments
-                  sauvegardés · {profile.name}
+                  {countLabel(item.count, "change")} ·{" "}
+                  {countLabel(item.resources.length, "item")} backed up
                 </p>
                 <div className="history-card-footer">
-                  <span>Application locale</span>
+                  <span>Applied locally</span>
                   <Button
                     size="sm"
                     variant="outline"
                     onClick={() => setRevision(item)}
                   >
                     <RotateCcw size={13} />
-                    Restaurer en brouillon
+                    Restore as draft
                   </Button>
                 </div>
               </div>
@@ -53,19 +53,19 @@ export function HistoryPage({ profile }: { profile: Profile }) {
       ) : (
         <EmptyState
           icon={History}
-          title="L’histoire commence ici"
-          description="Appliquez une première configuration pour créer une sauvegarde."
+          title="Your history starts here"
+          description="Apply your first configuration to create a backup."
         />
       )}
       {revision && (
         <Modal
-          title="Restaurer cette version ?"
-          description={`La version du ${dateLabel(revision.date)} remplacera les brouillons actuels. Vérifiez ensuite les changements avant de l’appliquer.`}
+          title="Restore this version?"
+          description={`The version from ${dateLabel(revision.date)} will replace the current drafts. Review the changes before applying it.`}
           onClose={() => setRevision(null)}
         >
           <div className="dialog-actions">
             <Button variant="outline" onClick={() => setRevision(null)}>
-              Annuler
+              Cancel
             </Button>
             <Button
               disabled={busy}
@@ -73,14 +73,14 @@ export function HistoryPage({ profile }: { profile: Profile }) {
                 void controller
                   .run(
                     () => controller.service.restore(profile.id, revision.id),
-                    "Version restaurée en brouillon. Vérifiez les changements avant application."
+                    "Version restored as a draft. Review the changes before applying."
                   )
                   .then((ok) => {
                     if (ok) setRevision(null)
                   })
               }}
             >
-              Restaurer le brouillon
+              Restore draft
             </Button>
           </div>
         </Modal>

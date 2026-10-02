@@ -22,12 +22,12 @@ export class BrowserProfileTransfer implements ProfileTransfer {
 
   decode(text: string) {
     if (text.length > 20_000_000)
-      throw new Error("Le fichier dépasse la limite de 20 Mo.")
+      throw new Error("The file exceeds the 20 MB limit.")
     try {
       return exportSchema.parse(JSON.parse(text)).profile
     } catch {
       throw new Error(
-        "Ce fichier n’est pas un export Agent Switch valide (version 1)."
+        "This file is not a valid Agent Switch export (version 1)."
       )
     }
   }

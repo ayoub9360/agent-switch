@@ -1,23 +1,19 @@
 import { useEffect, useRef, useState } from "react"
 import {
-  ChevronRight,
   Download,
   Upload,
-  Folder,
   Menu,
   Check,
   X,
   AlertCircle,
   LoaderCircle,
   ArrowRight,
-  Plus,
 } from "lucide-react"
 import { Button } from "@agent-switch/ui/components/button"
 import { cn } from "@agent-switch/ui/lib/utils"
 import {
   changesFor,
   type Assistant,
-  type Profile,
   type Resource,
   type ResourceKind,
 } from "@/domain/workspace"
@@ -32,10 +28,7 @@ import {
   ResourcePage,
   CreateResourceDialog,
 } from "@/presentation/pages/resources"
-import {
-  ProfilesPage,
-  CreateProfileDialog,
-} from "@/presentation/pages/profiles"
+import { InstructionsPage } from "@/presentation/pages/instructions"
 import { HistoryPage } from "@/presentation/pages/history"
 import { SettingsPage } from "@/presentation/pages/settings"
 
@@ -54,10 +47,6 @@ export function App() {
   const [search, setSearch] = useState(false)
   const [onboarding, setOnboarding] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const [createProfile, setCreateProfile] = useState<{
-    source?: Profile
-    editing?: boolean
-  } | null>(null)
   const [createResource, setCreateResource] = useState<ResourceKind | null>(
     null
   )
@@ -99,30 +88,17 @@ export function App() {
     return () => window.removeEventListener("beforeunload", warn)
   }, [editorDirty])
   const leaveEditor = () =>
-    !editorDirty ||
-    window.confirm(
-      "Abandonner les modifications non enregistrées dans l’éditeur ?"
-    )
+    !editorDirty || window.confirm("Discard unsaved changes in the editor?")
   const navigate = (next: Page) => {
     if (next !== page && !leaveEditor()) return
     setPage(next)
     window.location.hash = next
     setMobileOpen(false)
   }
-  const selectProfile = (id: string) => {
-    if (!leaveEditor()) return
-    setEditorDirty(false)
-    void controller
-      .run(() => controller.service.selectProfile(id))
-      .then((ok) => {
-        if (ok) {
-          setSelection(null)
-          navigate("overview")
-        }
-      })
-  }
   const edit = (resource: Resource) => {
-    setAssistant("all")
+    setAssistant(
+      resource.kind === "instructions" ? resource.targets[0]! : "all"
+    )
     setSelection(resource.id)
     navigate(resource.kind)
   }
@@ -134,14 +110,14 @@ export function App() {
           <LoaderCircle className="spin" size={22} />
         </span>
         <h1>Agent Switch</h1>
-        <p>{error || "Préparation de votre espace…"}</p>
+        <p>{error || "Preparing your workspace…"}</p>
         {error && (
           <Button
             onClick={() => {
               void controller.initialize()
             }}
           >
-            Réessayer
+            Retry
           </Button>
         )}
       </div>
@@ -150,7 +126,7 @@ export function App() {
   const resources = profile.resources.filter(
     (resource) => assistant === "all" || resource.targets.includes(assistant)
   )
-  const resourcePage = ["instructions", "skills", "mcp", "hooks"].includes(page)
+  const resourcePage = ["skills", "mcp", "hooks"].includes(page)
   const showFilter = page === "overview" || resourcePage
 
   return (
@@ -158,12 +134,9 @@ export function App() {
       className={cn("app-shell", changes.length > 0 && "has-pending-changes")}
     >
       <Sidebar
-        workspace={workspace}
         profile={profile}
         page={page}
         navigate={navigate}
-        selectProfile={selectProfile}
-        createProfile={() => setCreateProfile({})}
         search={() => setSearch(true)}
         close={() => setMobileOpen(false)}
         mobileOpen={mobileOpen}
@@ -172,15 +145,12 @@ export function App() {
         <header className="topbar">
           <button
             className="mobile-menu icon-button"
-            aria-label="Ouvrir le menu"
+            aria-label="Open menu"
             onClick={() => setMobileOpen(true)}
           >
             <Menu size={18} />
           </button>
           <div className="breadcrumbs">
-            <Folder size={14} />
-            <button onClick={() => navigate("profiles")}>{profile.name}</button>
-            <ChevronRight size={13} />
             <span>{sections[page].label}</span>
           </div>
           <div className="topbar-actions">
@@ -190,18 +160,18 @@ export function App() {
               onClick={() => importRef.current?.click()}
             >
               <Upload size={14} />
-              <span>Importer</span>
+              <span>Import</span>
             </Button>
             <Button
               variant="outline"
               size="sm"
               onClick={() => {
                 controller.transfer.download(profile)
-                controller.notify("Profil exporté au format JSON.")
+                controller.notify("Configuration exported as JSON.")
               }}
             >
               <Download size={14} />
-              <span>Exporter</span>
+              <span>Export</span>
             </Button>
           </div>
         </header>
@@ -209,24 +179,9 @@ export function App() {
           <div className="page-content">
             <div className="page-heading">
               <div>
-                <div className="page-eyebrow">
-                  <span className={cn("profile-dot", profile.color)} />
-                  {profile.name}
-                  <span>/</span>
-                  {profile.path ? "PROJET" : "GLOBAL"}
-                </div>
                 <h1>{sections[page].label}</h1>
                 <p>{sections[page].description}</p>
               </div>
-              {page === "overview" && (
-                <Button
-                  variant="outline"
-                  onClick={() => setCreateProfile({ source: profile })}
-                >
-                  <Plus size={14} />
-                  Dupliquer le profil
-                </Button>
-              )}
             </div>
             {showFilter && (
               <div className="context-toolbar">
@@ -239,10 +194,6 @@ export function App() {
                     }
                   }}
                 />
-                <span className="scope-caption">
-                  <Folder size={12} />
-                  {profile.path || "Configuration globale"}
-                </span>
               </div>
             )}
             {page === "overview" && (
@@ -252,7 +203,16 @@ export function App() {
                 navigate={navigate}
                 review={() => setReview(true)}
                 edit={edit}
-                onboarding={() => setOnboarding(true)}
+              />
+            )}
+            {page === "instructions" && (
+              <InstructionsPage
+                profile={profile}
+                assistant={assistant === "all" ? "claude" : assistant}
+                onAssistantChange={setAssistant}
+                selection={selection}
+                select={setSelection}
+                onDirtyChange={setEditorDirty}
               />
             )}
             {resourcePage && (
@@ -265,14 +225,6 @@ export function App() {
                 selection={selection}
                 select={setSelection}
                 openEditor={() => setCreateResource(page as ResourceKind)}
-              />
-            )}
-            {page === "profiles" && (
-              <ProfilesPage
-                edit={(source) => setCreateProfile({ source, editing: true })}
-                create={() => setCreateProfile({})}
-                duplicate={(source) => setCreateProfile({ source })}
-                activate={selectProfile}
               />
             )}
             {page === "history" && (
@@ -288,18 +240,18 @@ export function App() {
           </div>
         </main>
         {changes.length > 0 && (
-          <footer className="statusbar" aria-label="Changements en attente">
+          <footer className="statusbar" aria-label="Pending changes">
             <button onClick={() => setReview(true)} className="pending-action">
               <span className="pending-dot" aria-hidden="true" />
               <span className="pending-summary" aria-live="polite">
                 <strong>
-                  {changes.length} changement{changes.length > 1 ? "s" : ""} en
-                  attente
+                  {changes.length} pending change
+                  {changes.length !== 1 ? "s" : ""}
                 </strong>
-                <span>Vérifiez vos modifications avant de les appliquer.</span>
+                <span>Review your changes before applying them.</span>
               </span>
               <span className="pending-cta">
-                Vérifier <ArrowRight size={14} />
+                Review <ArrowRight size={14} />
               </span>
             </button>
           </footer>
@@ -311,13 +263,13 @@ export function App() {
         tabIndex={-1}
         type="file"
         accept=".json,application/json"
-        aria-label="Importer un fichier de profil"
+        aria-label="Import a configuration file"
         onChange={(event) => {
           const file = event.target.files?.[0]
           event.target.value = ""
           if (!file) return
           if (file.size > 20_000_000) {
-            controller.fail(new Error("Le fichier dépasse la limite de 20 Mo."))
+            controller.fail(new Error("The file exceeds the 20 MB limit."))
             return
           }
           void file
@@ -326,7 +278,7 @@ export function App() {
               const imported = controller.transfer.decode(text)
               return controller.run(
                 () => controller.service.importProfile(imported),
-                "Profil importé. Aucun changement n’a été appliqué."
+                "Configuration imported. No changes have been applied."
               )
             })
             .catch(controller.fail)
@@ -341,7 +293,7 @@ export function App() {
           <span>{error || notice}</span>
           <button
             className="icon-button"
-            aria-label="Fermer la notification"
+            aria-label="Dismiss notification"
             onClick={controller.dismiss}
           >
             <X size={14} />
@@ -350,16 +302,6 @@ export function App() {
       )}
       {review && (
         <ReviewDialog profile={profile} onClose={() => setReview(false)} />
-      )}
-      {createProfile && (
-        <CreateProfileDialog
-          editing={createProfile.editing}
-          source={createProfile.source}
-          onClose={() => {
-            setCreateProfile(null)
-            navigate("overview")
-          }}
-        />
       )}
       {createResource && (
         <CreateResourceDialog
@@ -370,10 +312,8 @@ export function App() {
       )}
       {search && (
         <CommandPalette
-          workspace={workspace}
           profile={profile}
           navigate={navigate}
-          selectProfile={selectProfile}
           edit={edit}
           onClose={() => setSearch(false)}
         />

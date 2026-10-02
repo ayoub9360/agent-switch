@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util"
-import { resolve, join, isAbsolute } from "node:path"
+import { join } from "node:path"
 import { mkdir, rm, stat, chmod } from "node:fs/promises"
 import { randomUUID } from "node:crypto"
 import {
@@ -7,14 +7,20 @@ import {
   recordApplication,
   validateResource,
   type Workspace,
+  type Profile,
+  type Resource,
 } from "@agent-switch/core/workspace"
 import { workspaceSchema } from "@agent-switch/core/schemas"
 import type { WorkspaceRepository } from "@agent-switch/core/ports"
 import { Machine, type Scan, type Plan } from "./machine"
-import { atomicWrite, hash, read, writablePath, inside } from "./files"
+import { atomicWrite, hash, read, writablePath } from "./files"
+import { moveDirectory, undoMoves, type DirectoryMove } from "./skill-storage"
+
+import { retainOpenAiMetadata } from "./skill-files"
 
 interface State extends Scan {
   revision: number
+  currentResources?: Resource[]
 }
 interface BackupEntry {
   file: string
@@ -35,7 +41,11 @@ export class LocalRepository implements WorkspaceRepository {
     await mkdir(this.directory, { recursive: true, mode: 0o700 })
     const pending = await read(join(this.directory, "pending.json"))
     if (pending) {
-      const entries = JSON.parse(pending.toString()) as BackupEntry[]
+      const journal = JSON.parse(pending.toString()) as
+        BackupEntry[] | { entries: BackupEntry[]; moves: DirectoryMove[] }
+      const entries = Array.isArray(journal) ? journal : journal.entries
+      if (!Array.isArray(journal))
+        await undoMoves(this.machine.home, journal.moves)
       for (const entry of entries) {
         await writablePath(this.machine.home, entry.file)
         const current = await read(entry.file)
@@ -46,7 +56,7 @@ export class LocalRepository implements WorkspaceRepository {
             (entry.before ? hash(Buffer.from(entry.before, "base64")) : null)
         )
           throw new Error(
-            "Transaction interrompue avec modifications externes. Consultez pending.json avant de redémarrer."
+            "Transaction interrupted with external changes. Check pending.json before restarting."
           )
       }
       await this.rollback(entries)
@@ -54,11 +64,93 @@ export class LocalRepository implements WorkspaceRepository {
     }
     const stored = await read(this.stateFile)
     if (stored) {
-      this.state = JSON.parse(stored.toString())
+      const legacy = JSON.parse(stored.toString()) as State
+      const projectProfiles = legacy.workspace.profiles.filter(
+        (p) =>
+          Boolean(p.path) ||
+          [
+            ...p.resources,
+            ...p.applied,
+            ...p.history.flatMap((h) => h.resources),
+          ].some((r) => String(r.scope) !== "global")
+      )
+      if (projectProfiles.length) {
+        await atomicWrite(
+          join(
+            this.directory,
+            "backups",
+            `before-global-only-${Date.now()}.json`
+          ),
+          stored
+        )
+        legacy.workspace.profiles = legacy.workspace.profiles
+          .filter((p) => !p.path)
+          .map((p) => ({
+            ...p,
+            resources: p.resources.filter((r) => String(r.scope) === "global"),
+            applied: p.applied.filter((r) => String(r.scope) === "global"),
+            history: p.history.map((h) => ({
+              ...h,
+              resources: h.resources.filter(
+                (r) => String(r.scope) === "global"
+              ),
+            })),
+          }))
+        const global = await this.machine.scan()
+        if (!legacy.workspace.profiles.length)
+          legacy.workspace.profiles = global.workspace.profiles
+        if (
+          !legacy.workspace.profiles.some(
+            (p) => p.id === legacy.workspace.activeProfileId
+          )
+        )
+          legacy.workspace.activeProfileId = legacy.workspace.profiles[0]!.id
+        legacy.bindings = Object.fromEntries(
+          Object.entries(legacy.bindings).filter(
+            ([, binding]) => !binding.profilePath
+          )
+        )
+        legacy.fingerprints = global.fingerprints
+        legacy.currentResources = global.workspace.profiles[0]!.resources
+      }
+      if (legacy.workspace.profiles.length > 1) {
+        await atomicWrite(
+          join(
+            this.directory,
+            "backups",
+            `before-single-configuration-${Date.now()}.json`
+          ),
+          stored
+        )
+        const selected =
+          legacy.workspace.profiles.find(
+            (p) => p.id === legacy.workspace.activeProfileId
+          ) ?? legacy.workspace.profiles[0]!
+        legacy.workspace.profiles = [selected]
+        legacy.workspace.activeProfileId = selected.id
+      }
+      legacy.workspace.profiles[0]!.name = "Global configuration"
+      // The card description is an excerpt; the complete skill metadata stays in content.
+      for (const resource of [
+        ...legacy.workspace.profiles.flatMap((p) => [
+          ...p.resources,
+          ...p.applied,
+          ...p.history.flatMap((h) => h.resources),
+        ]),
+        ...(legacy.currentResources ?? []),
+      ])
+        if (resource.kind === "skills")
+          resource.description = resource.description.slice(0, 500)
+      this.state = legacy
       this.state.workspace = workspaceSchema.parse(this.state.workspace)
       await this.refresh()
     } else {
-      this.state = { ...(await this.machine.scan()), revision: 1 }
+      const scan = await this.machine.scan()
+      this.state = {
+        ...scan,
+        currentResources: scan.workspace.profiles[0]!.resources,
+        revision: 1,
+      }
       await this.persist(this.state)
     }
   }
@@ -76,40 +168,12 @@ export class LocalRepository implements WorkspaceRepository {
     const workspace = workspaceSchema.parse(input)
     for (const profile of workspace.profiles) {
       const old = this.state.workspace.profiles.find((p) => p.id === profile.id)
-      if (profile.path.trim()) {
-        const expanded = profile.path
-          .trim()
-          .replace(/^~(?=\/|$)/, this.machine.home)
-        if (!isAbsolute(expanded))
-          throw new Error(
-            "Utilisez un chemin de projet absolu ou commençant par ~/."
-          )
-        profile.path = resolve(expanded)
-        if (!inside(this.machine.home, profile.path)) {
-          if (
-            !old &&
-            profile.resources.every(
-              (r) => r.source === "Importé dans Agent Switch"
-            )
-          )
-            profile.path = ""
-          else
-            throw new Error(
-              "Le dossier du projet doit se trouver dans le compte utilisateur."
-            )
-        }
-      } else profile.path = ""
-
       if (
         !isDeepStrictEqual(profile.applied, old?.applied ?? []) ||
         !isDeepStrictEqual(profile.history, old?.history ?? [])
       )
         throw new Error(
-          "Les configurations appliquées et l’historique sont gérés par le serveur."
-        )
-      if (old?.applied.length && old.path !== profile.path)
-        throw new Error(
-          "Dupliquez le profil pour changer son dossier après une application."
+          "Applied configurations and history are managed by the server."
         )
       for (const change of changesFor(profile))
         if (change.after) {
@@ -125,6 +189,7 @@ export class LocalRepository implements WorkspaceRepository {
           }
         }
     }
+    this.alignProfiles(workspace, this.state.currentResources ?? [])
     workspace.machine = this.state.workspace.machine
     await this.persist({
       ...this.state,
@@ -133,93 +198,163 @@ export class LocalRepository implements WorkspaceRepository {
     })
   }
   async refresh() {
-    const scan = await this.machine.scan(
-      this.state.workspace.profiles.map((p) => p.path)
+    const scan = await this.machine.scan()
+    // Keep skill identity stable when enabling a second assistant changes discovery order.
+    const known =
+      this.state.currentResources ?? this.state.workspace.profiles[0]!.applied
+    const profile = this.state.workspace.profiles[0]!
+    const scannedSkills = scan.workspace.profiles[0]!.resources.filter(
+      (r) => r.kind === "skills"
     )
+    const discoveredBindings = { ...scan.bindings }
+    for (const resource of scannedSkills) delete scan.bindings[resource.id]
+    const assigned = new Set<string>()
+    for (const resource of scannedSkills) {
+      const discovered = discoveredBindings[resource.id]!
+      const paths = new Set(
+        discovered.skillLocations?.map((l) => l.file) ?? [discovered.file]
+      )
+      const existing = known.find(
+        (r) =>
+          r.kind === "skills" &&
+          this.machine
+            .destinations(r, profile, this.state.bindings)
+            .some((b) => paths.has(b.file))
+      )
+      if (!existing || assigned.has(existing.id)) {
+        if (assigned.has(resource.id))
+          resource.id = hash(discovered.file + "distinct-skill").slice(0, 24)
+        assigned.add(resource.id)
+        scan.bindings[resource.id] = discovered
+        continue
+      }
+      assigned.add(existing.id)
+      // When Codex is disabled, discovery sees only the portable Claude copy.
+      // Keep Codex settings in the library for a future reactivation/export.
+      if (!resource.targets.includes("codex"))
+        retainOpenAiMetadata(resource, existing)
+      const old = this.state.bindings[existing.id]
+      resource.id = existing.id
+      resource.source = existing.source
+      resource.name = existing.name
+      const previousLocations = old?.skillLocations ?? []
+      scan.bindings[resource.id] = {
+        ...discovered,
+        file: old?.file ?? discovered.file,
+        skillLocations: [
+          ...previousLocations.filter((l) => !paths.has(l.file)),
+          ...(discovered.skillLocations ?? []),
+        ],
+      }
+    }
     for (const file of Object.keys(this.state.fingerprints))
       if (!(file in scan.fingerprints)) {
         try {
           const bytes = await read(file)
           scan.fingerprints[file] = bytes ? hash(bytes) : null
         } catch {
-          scan.workspace.machine!.warnings.push(`Lecture impossible : ${file}`)
+          scan.workspace.machine!.warnings.push(`Unable to read: ${file}`)
         }
       }
     const workspace = structuredClone(this.state.workspace)
-    for (const discovered of scan.workspace.profiles) {
-      const existing = workspace.profiles.find((p) => p.id === discovered.id)
-      if (existing && !changesFor(existing).length) {
-        const disabled = existing.resources.filter(
-          (r) => !r.enabled && !discovered.resources.some((d) => d.id === r.id)
+    const scanned = scan.workspace.profiles[0]!.resources
+    // Native file identity is discovery metadata, independent of unsaved text drafts.
+    for (const profile of workspace.profiles)
+      for (const resource of [...profile.resources, ...profile.applied]) {
+        const actual = scanned.find(
+          (r) => r.id === resource.id && r.kind === "instructions"
         )
-        existing.resources = [...discovered.resources, ...disabled]
-        existing.applied = structuredClone(existing.resources)
-      } else if (!existing) workspace.profiles.push(discovered)
+        if (actual) {
+          resource.instructionRole = actual.instructionRole
+          resource.instructionPaths = actual.instructionPaths
+        }
+      }
+    const currentResources = [
+      ...scanned,
+      ...(this.state.currentResources ?? []).filter(
+        (r) => !r.enabled && !scanned.some((actual) => actual.id === r.id)
+      ),
+    ]
+    const bindings = { ...this.state.bindings, ...scan.bindings }
+    const selected = workspace.profiles.find(
+      (p) => p.id === workspace.activeProfileId
+    )
+    // A clean selected profile follows external edits; inactive presets retain their desired configuration.
+    if (selected && !changesFor(selected).length) {
+      const disabled = selected.resources.filter((r) => !r.enabled)
+      selected.resources = [
+        ...currentResources,
+        ...disabled.filter((r) => !currentResources.some((c) => c.id === r.id)),
+      ]
     }
-    for (const profile of workspace.profiles) {
-      profile.applied = await this.machine.baseline(profile, {
-        ...this.state.bindings,
-        ...scan.bindings,
-      })
-    }
+    this.alignProfiles(workspace, currentResources, bindings)
     workspace.machine = scan.workspace.machine
     await this.persist({
       ...this.state,
       workspace,
+      currentResources,
       bindings: { ...this.state.bindings, ...scan.bindings },
       fingerprints: { ...this.state.fingerprints, ...scan.fingerprints },
       revision: this.state.revision + 1,
     })
     return this.load()
   }
-  private async scanScope(path = "") {
-    const root = path
-      ? resolve(path.replace(/^~(?=\/)/, this.machine.home))
-      : ""
-    if (
-      root &&
-      (!inside(this.machine.home, root) ||
-        !(await stat(root).catch(() => null))?.isDirectory())
-    )
-      throw new Error(
-        "Dossier de projet introuvable dans le compte utilisateur."
-      )
-    const scan = await this.machine.scan(root ? [root] : [])
-    const profile = scan.workspace.profiles.find((p) => p.path === root)
-    if (!profile)
-      throw new Error("Aucune configuration détectée dans ce dossier.")
-    return { scan, profile }
+  async discover() {
+    return (await this.machine.scan()).workspace.profiles[0]!.resources
   }
-  async discover(path?: string) {
-    return (await this.scanScope(path)).profile.resources
+  private alignProfiles(
+    workspace: Workspace,
+    current: Resource[],
+    bindings = this.state.bindings
+  ) {
+    const slots = (resource: Resource, profile: Profile) =>
+      this.machine
+        .destinations(resource, profile, bindings)
+        .map((b) => b.file + JSON.stringify(b.keys ?? []))
+        .sort()
+        .join("\n")
+    for (const profile of workspace.profiles) {
+      profile.applied = current.map((actual) => {
+        const desired = profile.resources.find(
+          (r) => slots(r, profile) === slots(actual, profile)
+        )
+        if (!desired) return structuredClone(actual)
+        const baseline = {
+          ...structuredClone(desired),
+          content: actual.content,
+          enabled: actual.enabled,
+        }
+        if (actual.files) baseline.files = structuredClone(actual.files)
+        else delete baseline.files
+        if (actual.fileModes)
+          baseline.fileModes = structuredClone(actual.fileModes)
+        else delete baseline.fileModes
+        return baseline
+      })
+    }
   }
   async importDetected(input: {
-    name: string
-    path: string
+    name?: string
     targets: ("claude" | "codex")[]
   }) {
     if (
-      !input.name?.trim() ||
       !input.targets?.length ||
       input.targets.some((t) => !["claude", "codex"].includes(t))
     )
-      throw new Error("Nom et assistants requis.")
-    if (this.state.workspace.profiles.some((p) => p.name === input.name.trim()))
-      throw new Error("Un profil porte déjà ce nom.")
-    const { scan, profile } = await this.scanScope(input.path)
+      throw new Error("Assistants are required.")
+    const scan = await this.machine.scan()
     const workspace = structuredClone(this.state.workspace)
-    const resources = profile.resources.filter((r) =>
-      r.targets.some((t) => input.targets.includes(t))
-    )
-    const id = randomUUID()
-    workspace.profiles.push({
-      ...profile,
-      id,
-      name: input.name.trim(),
-      resources,
-      applied: structuredClone(resources),
+    const profile = workspace.profiles[0]!
+    for (const resource of scan.workspace.profiles[0]!.resources)
+      if (
+        resource.targets.some((t) => input.targets.includes(t)) &&
+        !profile.resources.some((r) => r.id === resource.id)
+      )
+        profile.resources.push(resource)
+    this.alignProfiles(workspace, this.state.currentResources ?? [], {
+      ...this.state.bindings,
+      ...scan.bindings,
     })
-    workspace.activeProfileId = id
     await this.persist({
       ...this.state,
       workspace: workspaceSchema.parse(workspace),
@@ -233,11 +368,12 @@ export class LocalRepository implements WorkspaceRepository {
     const profile = this.state.workspace.profiles.find(
       (p) => p.id === profileId
     )
-    if (!profile) throw new Error("Profil introuvable.")
+    if (!profile) throw new Error("Profile not found.")
     return this.machine.plan(
       profile,
       this.state.bindings,
-      this.state.fingerprints
+      this.state.fingerprints,
+      this.directory
     )
   }
   private async rollback(entries: BackupEntry[]) {
@@ -251,6 +387,11 @@ export class LocalRepository implements WorkspaceRepository {
   }
   private async transaction(plan: Plan) {
     const entries: BackupEntry[] = []
+    for (const [file, expected] of plan.expected) {
+      const bytes = await read(file)
+      if ((bytes ? hash(bytes) : null) !== expected)
+        throw new Error(`Concurrent change detected: ${file}`)
+    }
     for (const [file, after] of plan) {
       await writablePath(this.machine.home, file)
       const before = await read(file)
@@ -258,7 +399,7 @@ export class LocalRepository implements WorkspaceRepository {
         plan.expected.has(file) &&
         (before ? hash(before) : null) !== plan.expected.get(file)
       )
-        throw new Error(`Modification concurrente détectée : ${file}`)
+        throw new Error(`Concurrent change detected: ${file}`)
       entries.push({
         file,
         before: before?.toString("base64") ?? null,
@@ -271,10 +412,11 @@ export class LocalRepository implements WorkspaceRepository {
       "backups",
       `${Date.now()}-${randomUUID()}.json`
     )
-    await atomicWrite(backup, JSON.stringify(entries))
+    await atomicWrite(backup, JSON.stringify({ entries, moves: plan.moves }))
     const pending = join(this.directory, "pending.json")
-    await atomicWrite(pending, JSON.stringify(entries))
+    await atomicWrite(pending, JSON.stringify({ entries, moves: plan.moves }))
     const written: BackupEntry[] = []
+    const moved: DirectoryMove[] = []
     try {
       for (const [file, after] of plan) {
         const entry = entries.find((e) => e.file === file)!
@@ -283,7 +425,7 @@ export class LocalRepository implements WorkspaceRepository {
           (current ? hash(current) : null) !==
           (entry.before ? hash(Buffer.from(entry.before, "base64")) : null)
         )
-          throw new Error(`Modification concurrente détectée : ${file}`)
+          throw new Error(`Concurrent change detected: ${file}`)
         written.push(entry)
         if (after === null) await rm(file, { force: true })
         else {
@@ -291,7 +433,25 @@ export class LocalRepository implements WorkspaceRepository {
           if (plan.modes.has(file)) await chmod(file, plan.modes.get(file)!)
         }
       }
+      for (const move of plan.moves) {
+        for (const [file, original] of plan.expected) {
+          if (!file.startsWith(move.from + "/")) continue
+          const planned = plan.get(file)
+          const expected =
+            planned === undefined
+              ? original
+              : planned === null
+                ? null
+                : hash(planned)
+          const bytes = await read(file)
+          if ((bytes ? hash(bytes) : null) !== expected)
+            throw new Error(`Concurrent change detected: ${file}`)
+        }
+        await moveDirectory(this.machine.home, move)
+        moved.push(move)
+      }
     } catch (error) {
+      await undoMoves(this.machine.home, moved)
       await this.rollback(written)
       await rm(pending, { force: true })
       throw error
@@ -306,22 +466,26 @@ export class LocalRepository implements WorkspaceRepository {
       randomUUID(),
       new Date().toISOString()
     )
-    for (const profile of workspace.profiles)
-      if (profile.id !== profileId) {
-        profile.applied = await this.machine.baseline(
-          profile,
-          this.state.bindings,
-          plan
-        )
-      }
+    const currentResources = structuredClone(
+      workspace.profiles.find((p) => p.id === profileId)!.resources
+    )
+    this.alignProfiles(workspace, currentResources)
     const next: State = {
       ...this.state,
       workspace,
+      currentResources,
       revision: this.state.revision + 1,
       fingerprints: { ...this.state.fingerprints },
     }
     for (const [file, content] of plan)
       next.fingerprints[file] = content ? hash(content) : null
+    for (const move of plan.moves)
+      for (const [file, fingerprint] of Object.entries(next.fingerprints))
+        if (file.startsWith(move.from + "/")) {
+          next.fingerprints[move.to + file.slice(move.from.length)] =
+            fingerprint
+          next.fingerprints[file] = null
+        }
     plan.set(this.stateFile, Buffer.from(JSON.stringify(next, null, 2)))
     await this.transaction(plan)
     this.state = next

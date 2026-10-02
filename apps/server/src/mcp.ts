@@ -16,7 +16,7 @@ export async function testMcp(content: string) {
   if (config.env)
     for (const [key, value] of Object.entries(object(config.env))) {
       if (typeof value !== "string")
-        throw new Error("Variable d’environnement invalide.")
+        throw new Error("Invalid environment variable.")
       env[key] = value
     }
   let transport
@@ -26,7 +26,7 @@ export async function testMcp(content: string) {
       (!Array.isArray(config.args) ||
         config.args.some((a) => typeof a !== "string"))
     )
-      throw new Error("Les arguments MCP doivent être une liste de chaînes.")
+      throw new Error("MCP arguments must be a list of strings.")
     transport = new StdioClientTransport({
       command: config.command,
       args: config.args as string[] | undefined,
@@ -36,7 +36,7 @@ export async function testMcp(content: string) {
   } else if (typeof config.url === "string") {
     const url = new URL(config.url)
     if (!["https:", "http:"].includes(url.protocol))
-      throw new Error("URL HTTP ou HTTPS attendue.")
+      throw new Error("An HTTP or HTTPS URL is required.")
     const headers: Record<string, string> = {}
     for (const [key, value] of Object.entries(
       object(config.headers ?? config.http_headers ?? {})
@@ -55,7 +55,7 @@ export async function testMcp(content: string) {
       config.type === "sse"
         ? new SSEClientTransport(url, { requestInit: { headers } })
         : new StreamableHTTPClientTransport(url, { requestInit: { headers } })
-  } else throw new Error("Commande ou URL MCP manquante.")
+  } else throw new Error("Missing MCP command or URL.")
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     await Promise.race([
@@ -64,7 +64,7 @@ export async function testMcp(content: string) {
         timer = setTimeout(
           () =>
             reject(
-              new Error("Le serveur MCP n’a pas répondu sous 10 secondes.")
+              new Error("The MCP server did not respond within 10 seconds.")
             ),
           10_000
         )
@@ -73,7 +73,7 @@ export async function testMcp(content: string) {
     return {
       name: client.getServerVersion()?.name ?? "MCP",
       version: client.getServerVersion()?.version ?? "",
-      message: "Connexion et initialisation MCP réussies.",
+      message: "MCP connection and initialization succeeded.",
     }
   } finally {
     clearTimeout(timer)

@@ -1,22 +1,18 @@
 import { useState } from "react"
-import { Search, ArrowUpRight, Folder } from "lucide-react"
+import { Search, ArrowUpRight } from "lucide-react"
 import { Input } from "@agent-switch/ui/components/input"
-import type { Profile, Resource, Workspace } from "@/domain/workspace"
+import type { Profile, Resource } from "@/domain/workspace"
 import { sections, type Page } from "../config"
 import { Modal } from "./primitives"
 
 export function CommandPalette({
-  workspace,
   profile,
   navigate,
-  selectProfile,
   edit,
   onClose,
 }: {
-  workspace: Workspace
   profile: Profile
   navigate: (page: Page) => void
-  selectProfile: (id: string) => void
   edit: (resource: Resource) => void
   onClose: () => void
 }) {
@@ -26,24 +22,23 @@ export function CommandPalette({
   const pages = (Object.keys(sections) as Page[]).filter((key) =>
     matches(sections[key].label)
   )
-  const profiles = workspace.profiles.filter((item) => matches(item.name))
   const resources = profile.resources
     .filter((item) => matches(item.name))
     .slice(0, 8)
   return (
     <Modal
-      title="Rechercher dans votre espace"
-      description="Pages, profils et éléments du profil sélectionné."
+      title="Search your workspace"
+      description="Pages and items in your configuration."
       onClose={onClose}
     >
       <div className="search-field palette-search">
         <Search size={16} />
         <Input
           autoFocus
-          aria-label="Recherche globale"
+          aria-label="Global search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Une instruction, un profil, un serveur…"
+          placeholder="An instruction, a skill, a server…"
         />
       </div>
       <div className="command-results">
@@ -64,23 +59,7 @@ export function CommandPalette({
             </button>
           )
         })}
-        {profiles.length > 0 && <div className="eyebrow">PROFILS</div>}
-        {profiles.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => {
-              selectProfile(item.id)
-              onClose()
-            }}
-          >
-            <Folder size={15} />
-            {item.name}
-            <ArrowUpRight size={12} />
-          </button>
-        ))}
-        {resources.length > 0 && (
-          <div className="eyebrow">DANS {profile.name.toUpperCase()}</div>
-        )}
+        {resources.length > 0 && <div className="eyebrow">ITEMS</div>}
         {resources.map((item) => {
           const Icon = sections[item.kind].icon
           return (
@@ -97,12 +76,12 @@ export function CommandPalette({
             </button>
           )
         })}
-        {!pages.length && !profiles.length && !resources.length && (
-          <p className="no-results">Aucun résultat pour « {query} ».</p>
+        {!pages.length && !resources.length && (
+          <p className="no-results">No results for “{query}”.</p>
         )}
       </div>
       <div className="palette-hint">
-        <kbd>Tab</kbd> naviguer <kbd>↵</kbd> ouvrir <kbd>esc</kbd> fermer
+        <kbd>Tab</kbd> navigate <kbd>↵</kbd> open <kbd>esc</kbd> close
       </div>
     </Modal>
   )

@@ -27,18 +27,18 @@ export function SettingsPage({
     <div className="settings-page">
       <section className="panel">
         <SectionHeading
-          title="Machine connectée"
-          description={`${workspace?.machine?.hostname ?? "Service local"} · ${workspace?.machine?.home ?? ""}`}
+          title="Connected machine"
+          description={`${workspace?.machine?.hostname ?? "Local service"} · ${workspace?.machine?.home ?? ""}`}
         />
         <div className="settings-row">
           <div>
-            <strong>Configuration sur disque</strong>
+            <strong>Configuration on disk</strong>
             <p>
-              Dernière lecture :{" "}
+              Last read:{" "}
               {workspace?.machine?.scannedAt
-                ? new Date(workspace.machine.scannedAt).toLocaleString("fr-FR")
+                ? new Date(workspace.machine.scannedAt).toLocaleString("en-US")
                 : "—"}
-              . Actualisez après une modification externe.
+              . Refresh after external changes.
             </p>
           </div>
           <Button
@@ -46,11 +46,11 @@ export function SettingsPage({
             onClick={() => {
               void controller.run(
                 () => controller.discovery.refresh(),
-                "Configuration relue sur disque."
+                "Configuration reloaded from disk."
               )
             }}
           >
-            Actualiser depuis le disque
+            Refresh from disk
           </Button>
         </div>
         {workspace?.machine?.warnings.map((warning) => (
@@ -62,8 +62,8 @@ export function SettingsPage({
 
       <section className="panel">
         <SectionHeading
-          title="Apparence"
-          description="Un thème confortable pour votre espace de travail."
+          title="Appearance"
+          description="A comfortable theme for your workspace."
         />
         <div className="theme-options">
           {(["dark", "light"] as const).map((theme) => (
@@ -88,7 +88,7 @@ export function SettingsPage({
               </div>
               <span>
                 {theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}{" "}
-                {theme === "dark" ? "Sombre" : "Clair"}
+                {theme === "dark" ? "Dark" : "Light"}
               </span>
             </button>
           ))}
@@ -96,15 +96,15 @@ export function SettingsPage({
       </section>
       <section className="panel">
         <SectionHeading
-          title="Emporter votre profil"
-          description="Un fichier JSON pour retrouver votre configuration sur une autre machine."
+          title="Take your configuration with you"
+          description="A JSON file to transfer your configuration to another machine."
         />
         <div className="settings-row">
           <div>
-            <strong>Exporter {profile.name}</strong>
+            <strong>Export configuration</strong>
             <p>
-              Inclut les contenus, fichiers des skills et chemins. Cet export
-              peut contenir les secrets présents dans vos configurations.
+              Includes content, skill files, and paths. This export may contain
+              secrets from your configurations.
             </p>
           </div>
           <Button
@@ -112,36 +112,37 @@ export function SettingsPage({
             onClick={() => controller.transfer.download(profile)}
           >
             <Download size={14} />
-            Exporter
+            Export
           </Button>
         </div>
         <div className="settings-row">
           <div>
-            <strong>Importer un profil</strong>
+            <strong>Import a configuration</strong>
             <p>
-              Un nouveau profil est créé, sans remplacer les profils existants.
+              Items are merged into the draft, then reviewed before being
+              applied.
             </p>
           </div>
           <Button variant="outline" onClick={importFile}>
             <Upload size={14} />
-            Importer
+            Import
           </Button>
         </div>
       </section>
       <section className="panel">
         <SectionHeading
-          title="À propos de cette version"
+          title="About this version"
           action={<Pill tone="violet">Local · v0.1.0</Pill>}
         />
         <div className="settings-row">
           <div>
             <strong>
               <Server size={15} />
-              Service local
+              Local service
             </strong>
             <p>
-              Les profils sont conservés sur la machine. L’application écrit les
-              fichiers des assistants et sauvegarde leur état précédent.
+              Configuration is stored on this machine. The app writes assistant
+              files and backs up their previous state.
             </p>
           </div>
         </div>
@@ -149,12 +150,14 @@ export function SettingsPage({
           <div>
             <strong>
               <Monitor size={15} />
-              Importer depuis la machine
+              Import from this machine
             </strong>
-            <p>Détectez vos instructions, skills, MCP et hooks existants.</p>
+            <p>
+              Detect your existing instructions, skills, MCP servers, and hooks.
+            </p>
           </div>
           <Button variant="outline" onClick={onboarding}>
-            Ouvrir <ArrowUpRight size={14} />
+            Open <ArrowUpRight size={14} />
           </Button>
         </div>
       </section>
