@@ -1298,7 +1298,7 @@ select {
   display: flex;
   min-height: 280px;
   max-height: 430px;
-  overflow: auto;
+  overflow: hidden;
   font-size: 11px;
   line-height: 21px;
   background: var(--background);

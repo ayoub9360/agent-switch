@@ -223,6 +223,7 @@ function ResourceDetail({
     return () => dirtyCallback.current(false)
   }, [changed])
   const [preview, setPreview] = useState(false)
+  const lineNumbersRef = useRef<HTMLDivElement>(null)
   const update = (patch: Partial<Resource>) =>
     setDraft((current) => ({ ...current, ...patch }))
   return (
@@ -368,7 +369,11 @@ function ResourceDetail({
             </div>
           ) : (
             <div className="code-area">
-              <div className="line-numbers" aria-hidden="true">
+              <div
+                ref={lineNumbersRef}
+                className="line-numbers"
+                aria-hidden="true"
+              >
                 {draft.content.split("\n").map((_, index) => (
                   <span key={index}>{index + 1}</span>
                 ))}
@@ -378,6 +383,11 @@ function ResourceDetail({
                 aria-label="Contenu de l’élément"
                 value={draft.content}
                 maxLength={100_000}
+                onScroll={(event) => {
+                  if (lineNumbersRef.current) {
+                    lineNumbersRef.current.style.transform = `translateY(-${event.currentTarget.scrollTop}px)`
+                  }
+                }}
                 onChange={(event) => {
                   update({ content: event.target.value })
                   setTested(null)
