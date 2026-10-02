@@ -24,7 +24,6 @@ import {
 import { useWorkspace } from "@/presentation/workspace-context"
 import { sections, type Page } from "@/presentation/config"
 import { Sidebar, AssistantFilter } from "@/presentation/components/sidebar"
-import { Pill } from "@/presentation/components/primitives"
 import { ReviewDialog } from "@/presentation/components/review-dialog"
 import { CommandPalette } from "@/presentation/components/command-palette"
 import { OnboardingDialog } from "@/presentation/components/onboarding-dialog"
@@ -183,10 +182,6 @@ export function App() {
             <span>{sections[page].label}</span>
           </div>
           <div className="topbar-actions">
-            <Pill tone="violet">
-              <span className="demo-dot" />
-              Local
-            </Pill>
             <Button
               variant="ghost"
               size="sm"
