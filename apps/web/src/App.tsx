@@ -154,7 +154,9 @@ export function App() {
   const showFilter = page === "overview" || resourcePage
 
   return (
-    <div className="app-shell">
+    <div
+      className={cn("app-shell", changes.length > 0 && "has-pending-changes")}
+    >
       <Sidebar
         workspace={workspace}
         profile={profile}
@@ -285,29 +287,23 @@ export function App() {
             )}
           </div>
         </main>
-        <footer className="statusbar">
-          <button
-            onClick={() => setReview(true)}
-            className={cn(
-              "pending-action",
-              changes.length > 0 && "has-changes"
-            )}
-          >
-            {changes.length ? (
-              <>
-                <span className="pending-dot" />
-                {changes.length} changements en attente
-                <span className="status-divider" />
-                Vérifier <ArrowRight size={13} />
-              </>
-            ) : (
-              <>
-                <Check size={13} />
-                Aucun changement en attente
-              </>
-            )}
-          </button>
-        </footer>
+        {changes.length > 0 && (
+          <footer className="statusbar" aria-label="Changements en attente">
+            <button onClick={() => setReview(true)} className="pending-action">
+              <span className="pending-dot" aria-hidden="true" />
+              <span className="pending-summary" aria-live="polite">
+                <strong>
+                  {changes.length} changement{changes.length > 1 ? "s" : ""} en
+                  attente
+                </strong>
+                <span>Vérifiez vos modifications avant de les appliquer.</span>
+              </span>
+              <span className="pending-cta">
+                Vérifier <ArrowRight size={14} />
+              </span>
+            </button>
+          </footer>
+        )}
       </div>
       <input
         ref={importRef}
