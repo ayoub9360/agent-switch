@@ -7,7 +7,14 @@ import {
   RotateCcw,
 } from "lucide-react"
 import { Button } from "@agent-switch/ui/components/button"
-import { changesFor, resourceSummary, type Profile } from "@/domain/workspace"
+import { Switch } from "@agent-switch/ui/components/switch"
+import {
+  assistantNames,
+  changesFor,
+  resourceSummary,
+  type Profile,
+} from "@/domain/workspace"
+import type { PlannedFile } from "@/application/ports"
 import { useWorkspace } from "../workspace-context"
 import { EmptyState, Modal, Pill } from "./primitives"
 import { ContentDiff } from "./content-diff"
@@ -22,29 +29,30 @@ export function ReviewDialog({
   const changes = changesFor(profile)
   const { controller, busy } = useWorkspace()
   const [discard, setDiscard] = useState(false)
-  const [plan, setPlan] = useState<
-    { path: string; action: string; bytes: number }[] | null
-  >(null)
+  const [sharedEditing, setSharedEditing] = useState(false)
+  const [plan, setPlan] = useState<PlannedFile[] | null>(null)
   const [planError, setPlanError] = useState<string | null>(null)
   useEffect(() => {
     let active = true
-    void controller.discovery.plan(profile.id).then(
-      (files) => {
-        if (active) setPlan(files)
-      },
-      (error) => {
-        if (active)
-          setPlanError(
-            error instanceof Error
-              ? error.message
-              : "Unable to prepare changes for application."
-          )
-      }
-    )
+    void controller.discovery
+      .plan(profile.id, sharedEditing ? "shared" : "local")
+      .then(
+        (files) => {
+          if (active) setPlan(files)
+        },
+        (error) => {
+          if (active)
+            setPlanError(
+              error instanceof Error
+                ? error.message
+                : "Unable to prepare changes for application."
+            )
+        }
+      )
     return () => {
       active = false
     }
-  }, [controller, profile])
+  }, [controller, profile, sharedEditing])
   return (
     <Modal
       wide
@@ -59,6 +67,30 @@ export function ReviewDialog({
           each application.
         </span>
       </div>
+      {changes.some(
+        (change) =>
+          change.kind === "skills" &&
+          change.after &&
+          (change.before?.content !== change.after.content ||
+            JSON.stringify(change.before?.files) !==
+              JSON.stringify(change.after.files))
+      ) && (
+        <label className="field-label">
+          <Switch
+            aria-label="Edit shared sources"
+            checked={sharedEditing}
+            disabled={busy}
+            onCheckedChange={(checked) => {
+              setPlan(null)
+              setPlanError(null)
+              setSharedEditing(checked)
+            }}
+          />
+          <span>
+            Edit shared sources (affects every assistant linked to them)
+          </span>
+        </label>
+      )}
       {planError && (
         <p role="alert" className="form-hint">
           {planError}
@@ -67,13 +99,59 @@ export function ReviewDialog({
       {plan && (
         <div className="diff-list">
           {plan.map((file) => (
-            <div className="diff-file-header" key={file.path}>
-              <FileCode2 size={14} />
-              <code>{file.path}</code>
-              <Pill tone={file.action === "delete" ? "amber" : "green"}>
-                {file.action === "delete" ? "Delete" : "Write"}
-              </Pill>
-            </div>
+            <section className="diff-file" key={file.path}>
+              <div className="diff-file-header">
+                <FileCode2 size={14} />
+                <code>{file.path}</code>
+                <Pill tone={file.action === "delete" ? "amber" : "green"}>
+                  {file.action === "delete"
+                    ? "Delete"
+                    : file.action === "isolate-root"
+                      ? "Separate folder"
+                      : file.action === "copy-skill"
+                        ? "Local copy"
+                        : file.action === "move-link"
+                          ? "Move link"
+                          : file.action === "move"
+                            ? "Move folder"
+                            : "Write"}
+                </Pill>
+              </div>
+              {file.action === "copy-skill" && (
+                <p className="form-hint">
+                  An independent copy will be created here. The shared source
+                  stays unchanged.
+                </p>
+              )}
+              {file.action === "isolate-root" && (
+                <p className="form-hint">
+                  This assistant gets its own folder. Other skills remain linked
+                  to their existing sources. The original folder link is backed
+                  up.
+                </p>
+              )}
+              {file.destination && (
+                <div className="diff-line">
+                  <code>Destination: {file.destination}</code>
+                </div>
+              )}
+              {file.action === "move-link" && (
+                <p className="form-hint">
+                  Only the discovery link is moved. Its shared contents stay in
+                  place.
+                </p>
+              )}
+              {file.sharedTargets && (
+                <p className="form-hint">
+                  This edits the shared source. All assistants linked to it
+                  receive the change, including{" "}
+                  {file.sharedTargets
+                    .map((target) => assistantNames[target])
+                    .join(" and ")}
+                  .
+                </p>
+              )}
+            </section>
           ))}
         </div>
       )}
@@ -178,7 +256,11 @@ export function ReviewDialog({
           onClick={() => {
             void controller
               .run(
-                () => controller.service.apply(profile.id),
+                () =>
+                  controller.service.apply(
+                    profile.id,
+                    sharedEditing ? "shared" : "local"
+                  ),
                 "Configuration applied on this machine. Backup created."
               )
               .then((ok) => {

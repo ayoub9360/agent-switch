@@ -76,17 +76,30 @@ assistants choisis. Les copies identiques détectées chez plusieurs assistants 
 regroupées ; les versions différentes restent séparées avec un avertissement.
 Les emplacements d’origine sont conservés en interne, sans définir l’identité visible du skill.
 `agents/openai.yaml` est conservé dans les données globales et distribué uniquement
-à Codex. Les autres fichiers (scripts, références, assets et fichiers auxiliaires)
-sont partagés. Les anciennes copies de ce YAML chez Claude sont retirées avec
-sauvegarde lors de la prochaine application d’un changement sur le skill.
+à Codex lors d’une création par assistant. Les copies locales issues d’un lien
+conservent le dossier source complet, notamment ses fichiers annexes et permissions.
+Une édition partagée ne retire pas les métadonnées nécessaires aux autres assistants.
 
-Désactiver un skill puis appliquer déplace son dossier complet dans
+Par défaut, modifier un skill lié crée une copie locale indépendante pour les
+assistants sélectionnés. La source partagée reste inchangée. L’option « Edit shared
+sources » de la revue permet explicitement d’éditer la source commune ; la revue
+indique alors les assistants liés qui recevront le changement.
+
+Désactiver un skill puis appliquer archive son entrée locale (lien ou dossier) dans
 `~/.agent-switch/disabled-skills/<identifiant-emplacement>/`. Il reste visible et
-modifiable dans la bibliothèque. Réactiver puis appliquer restaure le dossier à son
+modifiable dans la bibliothèque. Réactiver puis appliquer restaure cette entrée à son
 emplacement initial. Fichiers annexes, permissions, dossiers vides et liens sont
 conservés. Les skills retirés de la configuration sont également mis de côté.
 Un conflit avec un dossier existant bloque la restauration sans l’écraser.
 Les déplacements font partie de la transaction récupérable au redémarrage.
+
+Si une racine de découverte est elle-même liée, Agent Switch peut la remplacer
+par un dossier de liens individuels pour isoler l’action. Les autres skills restent
+accessibles. Les liens et dossiers remplacés sont conservés dans
+`~/.agent-switch/replaced-skills/`, avec un journal de sauvegarde et de récupération.
+Une synchronisation externe peut recréer les liens : actualiser avant de continuer.
+Un terminal déjà ouvert dans l’ancienne racine peut rester dans le dossier partagé ;
+revenir au dossier personnel puis rouvrir le chemin de l’assistant pour le vérifier.
 
 La migration archive l’ancien état dans `~/.agent-switch/backups/before-global-only-*.json`
 avant de retirer les anciens profils de dépôts de l’interface. Aucun fichier de
@@ -95,8 +108,9 @@ champs de compatibilité du format v1 restent fixés à `path: ""` et `scope: "g
 
 Les configurations administrateur hors du compte et les contenus des plugins ne
 sont pas gérés. Les erreurs de lecture sont visibles dans Paramètres. Les liens
-de fichiers vers une cible dans le compte sont conservés, même si leur cible est
-dans un dépôt ; les liens de dossiers de skills sont signalés et non parcourus.
+de fichiers et de dossiers de skills vers une cible dans le compte sont parcourus,
+même si leur cible est dans un dépôt. Les liens cassés, les cycles et les cibles
+hors du compte sont signalés.
 Les écritures sont limitées au dossier utilisateur.
 
 Les hooks sont édités dans leur format JSON natif (événements et groupes de
@@ -138,7 +152,8 @@ les instructions principales de Codex.
   permissions privées. Les anciens brouillons de démonstration du navigateur ne
   sont jamais importés dans la configuration réelle.
 - Les éditions restent des brouillons jusqu’à « Appliquer sur la machine ».
-  La commande `plan` expose les écritures, suppressions et déplacements prévus.
+  La commande `plan` expose les écritures, suppressions, déplacements, copies
+  locales et séparations de racines prévus.
 - Les écritures utilisent des fichiers temporaires et des renommages atomiques.
   Les réglages voisins des documents JSON/TOML sont conservés. La mise en forme et
   les commentaires TOML peuvent être normalisés lors de la sérialisation.
@@ -151,7 +166,7 @@ les instructions principales de Codex.
   Relire après un conflit permet de comparer le brouillon à la nouvelle version disque.
 - L’historique garde 30 révisions, avec un point de restauration avant
   sa première application. Restaurer prépare un brouillon, à appliquer explicitement.
-- Désactiver un skill déplace son dossier complet. Pour les autres ressources,
+- Désactiver un skill archive son lien ou son dossier local. Pour les autres ressources,
   la désactivation retire l’entrée native ou le fichier principal. Pour un fichier
   lié, sa cible est sauvegardée et modifiée ; le lien reste en place.
 - Un emplacement natif ne peut pas être ciblé par deux ressources activées.

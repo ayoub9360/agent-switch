@@ -160,8 +160,8 @@ export class WorkspaceService {
     })
   }
 
-  apply(profileId: string) {
-    return this.repository.apply(profileId)
+  apply(profileId: string, skillEditMode: "local" | "shared" = "local") {
+    return this.repository.apply(profileId, skillEditMode)
   }
 
   restore(profileId: string, revisionId: string) {

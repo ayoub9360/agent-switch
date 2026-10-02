@@ -10,6 +10,9 @@ import {
   readlink,
   readdir,
   chmod,
+  lstat,
+  rename,
+  realpath,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -24,6 +27,7 @@ import { createApi } from "./http"
 import { testMcp } from "./mcp"
 import * as files from "./files"
 import * as storage from "./skill-storage"
+import * as materializations from "./skill-materialization"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 
@@ -33,7 +37,9 @@ afterEach(async () => {
     await rm(home, { recursive: true, force: true })
 })
 async function fixture() {
-  const home = await mkdtemp(join(tmpdir(), "agent-switch-test-"))
+  const home = await realpath(
+    await mkdtemp(join(tmpdir(), "agent-switch-test-"))
+  )
   homes.push(home)
   const put = async (path: string, text: string) => {
     const file = join(home, path)
@@ -98,6 +104,659 @@ const draft = (
 })
 
 describe("Real filesystem integration", () => {
+  it("discovers linked skill directories and roots for both assistants", async () => {
+    const { home, put } = await fixture()
+    const content =
+      "---\nname: linked\ndescription: Linked skill\n---\n# Linked"
+    await put("shared/skills/linked/SKILL.md", content)
+    await put("shared/skills/linked/references/guide.txt", "Linked reference")
+    await mkdir(join(home, ".claude/skills"), { recursive: true })
+    await symlink("../shared/skills", join(home, ".codex/skills"))
+    await symlink(
+      "../../shared/skills/linked",
+      join(home, ".agents/skills/linked")
+    )
+    await symlink(
+      "../../shared/skills/linked",
+      join(home, ".claude/skills/linked")
+    )
+    const scan = await new Machine(home).scan()
+    const linked = scan.workspace.profiles[0]!.resources.filter(
+      (r) => r.kind === "skills" && r.name === "linked"
+    )
+    expect(linked).toHaveLength(1)
+    expect(linked[0]!.targets.toSorted()).toEqual(["claude", "codex"])
+    expect(linked[0]!.files).toEqual({
+      "references/guide.txt":
+        Buffer.from("Linked reference").toString("base64"),
+    })
+    expect(scan.bindings[linked[0]!.id]!.skillLocations).toHaveLength(3)
+    expect(scan.workspace.machine!.warnings).toEqual([])
+  })
+  it.each(["claude", "codex"] as const)(
+    "edits and restores linked skill directories for %s",
+    async (target) => {
+      const { home, put, repository, service } = await fixture()
+      const content =
+        "---\nname: linked\ndescription: Linked skill\n---\n# Linked"
+      await put("shared/linked/SKILL.md", content)
+      const root = join(home, `.${target}/skills`)
+      await mkdir(root, { recursive: true })
+      const link = join(root, "linked")
+      await symlink("../../shared/linked", link)
+      await repository.refresh()
+      const linked = (await repository.load()).profiles[0]!.resources.find(
+        (r) => r.kind === "skills" && r.name === "linked"
+      )!
+      await service.saveResource("machine", {
+        ...linked,
+        content: content + "\nEdit",
+      })
+      await service.apply("machine")
+      const edited = { ...linked, content: content + "\nEdit" }
+      await service.saveResource("machine", { ...edited, enabled: false })
+      await service.apply("machine")
+      expect(await storage.exists(link)).toBe(false)
+      await repository.refresh()
+      await service.saveResource("machine", { ...edited, enabled: true })
+      await service.apply("machine")
+      expect((await lstat(link)).isDirectory()).toBe(true)
+      expect(await readFile(join(link, "SKILL.md"), "utf8")).toBe(
+        content + "\nEdit"
+      )
+      expect(await readFile(join(home, "shared/linked/SKILL.md"), "utf8")).toBe(
+        content
+      )
+    }
+  )
+  it("keeps a linked SKILL.md attached to its local skill files", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content =
+      "---\nname: linked\ndescription: Linked skill\n---\n# Linked"
+    await put("shared/instructions.md", content)
+    await put("shared/unrelated.txt", "Not a skill attachment")
+    await put(".claude/skills/linked/references/guide.txt", "Local reference")
+    const link = join(home, ".claude/skills/linked/SKILL.md")
+    await symlink("../../../shared/instructions.md", link)
+    await repository.refresh()
+    const linked = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.kind === "skills" && r.name === "linked"
+    )!
+    expect(linked.content).toBe(content)
+    expect(linked.files).toEqual({
+      "references/guide.txt": Buffer.from("Local reference").toString("base64"),
+    })
+    await service.saveResource("machine", {
+      ...linked,
+      content: content + "\nEdit",
+    })
+    await service.apply("machine")
+    expect(await readFile(join(home, "shared/instructions.md"), "utf8")).toBe(
+      content
+    )
+    expect((await lstat(link)).isFile()).toBe(true)
+    expect(await readFile(link, "utf8")).toBe(content + "\nEdit")
+  })
+  it("updates a shared target once and toggles only the selected assistant links", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: shared\ndescription: Shared\n---\n# Shared"
+    await put("shared/skill/SKILL.md", content)
+    await put("shared/skill/agents/openai.yaml", "display_name: Shared")
+    for (const dir of [".claude/skills", ".codex/skills", ".agents/skills"]) {
+      await mkdir(join(home, dir), { recursive: true })
+      await symlink("../../shared/skill", join(home, dir, "shared"))
+    }
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "shared"
+    )!
+    const edited = { ...skill, content: content + "\nUpdated" }
+    await service.saveResource("machine", edited)
+    const plan = await repository.preview("machine", "shared")
+    expect([...plan.keys()]).toEqual([join(home, "shared/skill/SKILL.md")])
+    expect(
+      plan.shared.get(join(home, "shared/skill/SKILL.md"))?.toSorted()
+    ).toEqual(["claude", "codex"])
+    await service.apply("machine", "shared")
+    await service.saveResource("machine", { ...edited, targets: ["codex"] })
+    const toggle = await repository.preview("machine", "shared")
+    expect(toggle.size).toBe(0)
+    expect(toggle.moves).toHaveLength(1)
+    await service.apply("machine", "shared")
+    expect(await storage.exists(join(home, ".claude/skills/shared"))).toBe(
+      false
+    )
+    expect(
+      await readFile(join(home, ".codex/skills/shared/SKILL.md"), "utf8")
+    ).toBe(edited.content)
+    expect(
+      await readFile(join(home, "shared/skill/agents/openai.yaml"), "utf8")
+    ).toBe("display_name: Shared")
+    const reopened = new LocalRepository(
+      new Machine(home),
+      join(home, ".agent-switch")
+    )
+    await reopened.initialize()
+    const restoredService = new WorkspaceService(reopened, {
+      id: randomUUID,
+      now: () => new Date().toISOString(),
+    })
+    await restoredService.saveResource("machine", edited)
+    await restoredService.apply("machine")
+    expect(await readlink(join(home, ".claude/skills/shared"))).toBe(
+      "../../shared/skill"
+    )
+    expect(
+      await readFile(join(home, ".claude/skills/shared/SKILL.md"), "utf8")
+    ).toBe(edited.content)
+  })
+  it("rejects retargeted links and external changes to shared files", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: linked\ndescription: Linked\n---\n# Linked"
+    await put("shared/one/SKILL.md", content)
+    await put("shared/two/SKILL.md", content)
+    await mkdir(join(home, ".claude/skills"))
+    const link = join(home, ".claude/skills/linked")
+    await symlink("../../shared/one", link)
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "linked"
+    )!
+    await service.saveResource("machine", {
+      ...skill,
+      content: content + "\nEdit",
+    })
+    await rm(link)
+    await symlink("../../shared/two", link)
+    await expect(repository.preview("machine")).rejects.toThrow(
+      "symlink has changed"
+    )
+    await rm(link)
+    await symlink("../../shared/one", link)
+    await writeFile(join(home, "shared/one/SKILL.md"), "External edit")
+    await expect(repository.preview("machine")).rejects.toThrow(
+      "Skill file changed"
+    )
+    expect(await readFile(join(home, "shared/two/SKILL.md"), "utf8")).toBe(
+      content
+    )
+  })
+  it("rolls back shared writes and relative symlink moves together", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: linked\ndescription: Linked\n---\n# Linked"
+    await put("shared/skill/SKILL.md", content)
+    for (const dir of [".claude/skills", ".codex/skills"]) {
+      await mkdir(join(home, dir), { recursive: true })
+      await symlink("../../shared/skill", join(home, dir, "linked"))
+    }
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "linked"
+    )!
+    await service.saveResource("machine", {
+      ...skill,
+      content: content + "\nEdit",
+      enabled: false,
+    })
+    const move = storage.moveDirectory
+    let calls = 0
+    const spy = vi
+      .spyOn(storage, "moveDirectory")
+      .mockImplementation(async (...args) => {
+        if (++calls === 2) throw new Error("Move failed")
+        return move(...args)
+      })
+    try {
+      await expect(service.apply("machine")).rejects.toThrow("Move failed")
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await readFile(join(home, "shared/skill/SKILL.md"), "utf8")).toBe(
+      content
+    )
+    for (const dir of [".claude/skills", ".codex/skills"])
+      expect(await readlink(join(home, dir, "linked"))).toBe(
+        "../../shared/skill"
+      )
+  })
+  it("recovers an interrupted relative skill link move", async () => {
+    const { home, put, repository } = await fixture()
+    await put("shared/skill/SKILL.md", "Shared")
+    await mkdir(join(home, ".claude/skills"))
+    const from = join(home, ".claude/skills/linked")
+    await symlink("../../shared/skill", from)
+    const move = {
+      from,
+      to: storage.archivedSkill(repository.directory, from),
+      linkTarget: "../../shared/skill",
+    }
+    await writeFile(
+      join(repository.directory, "pending.json"),
+      JSON.stringify({ entries: [], moves: [move] })
+    )
+    await storage.moveDirectory(home, move)
+    await repository.initialize()
+    expect(await readlink(from)).toBe(move.linkTarget)
+    expect(await readFile(join(from, "SKILL.md"), "utf8")).toBe("Shared")
+  })
+  it("separates a linked root to disable Claude without affecting Codex", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: root-skill\ndescription: Root\n---\n# Root"
+    await put("shared/skills/root-skill/SKILL.md", content)
+    await put("shared/skills/other/SKILL.md", "Other skill")
+    await symlink("../shared/skills", join(home, ".claude/skills"))
+    await symlink("../shared/skills", join(home, ".codex/skills"))
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "root-skill"
+    )!
+    await service.saveResource("machine", { ...skill, targets: ["codex"] })
+    const plan = await repository.preview("machine")
+    expect(plan.materializations.map((op) => op.path)).toEqual([
+      join(home, ".claude/skills"),
+    ])
+    await service.apply("machine")
+    expect((await lstat(join(home, ".claude/skills"))).isDirectory()).toBe(true)
+    expect(await storage.exists(join(home, ".claude/skills/root-skill"))).toBe(
+      false
+    )
+    expect(await readlink(join(home, ".codex/skills"))).toBe("../shared/skills")
+    expect(
+      await readFile(join(home, ".codex/skills/root-skill/SKILL.md"), "utf8")
+    ).toBe(content)
+    expect(
+      await readFile(join(home, ".claude/skills/other/SKILL.md"), "utf8")
+    ).toBe("Other skill")
+    const reopened = new LocalRepository(
+      new Machine(home),
+      repository.directory
+    )
+    await reopened.initialize()
+    const restored = new WorkspaceService(reopened, {
+      id: randomUUID,
+      now: () => new Date().toISOString(),
+    })
+    await restored.saveResource("machine", skill)
+    await restored.apply("machine")
+    expect(
+      await readFile(join(home, ".claude/skills/root-skill/SKILL.md"), "utf8")
+    ).toBe(content)
+  })
+
+  it("edits and restores a disabled skill whose SKILL.md links to a local attachment", async () => {
+    const { home, put, repository, service } = await fixture()
+    const root = join(home, ".claude/skills/linked")
+    const content = "---\nname: linked\ndescription: Linked\n---\n# Linked"
+    await put(".claude/skills/linked/document.md", content)
+    await symlink("document.md", join(root, "SKILL.md"))
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "linked"
+    )!
+    await service.saveResource("machine", { ...skill, enabled: false })
+    await service.apply("machine")
+    const next = {
+      ...skill,
+      enabled: true,
+      content: content + "\nEdit",
+      files: {
+        "document.md": Buffer.from(content + "\nEdit").toString("base64"),
+      },
+    }
+    await service.saveResource("machine", next)
+    await service.apply("machine")
+    expect((await lstat(join(root, "SKILL.md"))).isFile()).toBe(true)
+    expect(await readFile(join(root, "SKILL.md"), "utf8")).toBe(next.content)
+  })
+  it("revalidates link targets after planning and before transaction writes", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: linked\ndescription: Linked\n---\n# Linked"
+    await put("shared/one/SKILL.md", content)
+    await put("shared/two/SKILL.md", content)
+    await mkdir(join(home, ".claude/skills"))
+    const link = join(home, ".claude/skills/linked")
+    await symlink("../../shared/one", link)
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "linked"
+    )!
+    await service.saveResource("machine", {
+      ...skill,
+      content: content + "\nEdit",
+    })
+    const plan = await repository.preview("machine")
+    const spy = vi.spyOn(repository, "preview").mockResolvedValue(plan)
+    await rm(link)
+    await symlink("../../shared/two", link)
+    try {
+      await expect(service.apply("machine")).rejects.toThrow(
+        "symlink has changed"
+      )
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await readFile(join(home, "shared/one/SKILL.md"), "utf8")).toBe(
+      content
+    )
+    expect(await readFile(join(home, "shared/two/SKILL.md"), "utf8")).toBe(
+      content
+    )
+  })
+  it("keeps differently named aliases in sync and rejects conflicting shared edits", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: shared\ndescription: Shared\n---\n# Shared"
+    await put("shared/skill/SKILL.md", content)
+    await mkdir(join(home, ".claude/skills"))
+    await symlink("../../shared/skill", join(home, ".claude/skills/first"))
+    await symlink("../../shared/skill", join(home, ".claude/skills/second"))
+    await repository.refresh()
+    const skills = (await repository.load()).profiles[0]!.resources
+    const first = skills.find((r) => r.name === "first")!
+    const second = skills.find((r) => r.name === "second")!
+    await service.saveResource("machine", {
+      ...first,
+      content: content + "\nFirst",
+    })
+    await service.saveResource("machine", {
+      ...second,
+      content: content + "\nSecond",
+    })
+    await expect(repository.preview("machine", "shared")).rejects.toThrow(
+      "Conflicting edits"
+    )
+    await service.discard("machine")
+    await service.saveResource("machine", {
+      ...first,
+      content: content + "\nFirst",
+    })
+    const result = await service.apply("machine", "shared")
+    for (const name of ["first", "second"]) {
+      expect(
+        result.profiles[0]!.resources.find((r) => r.name === name)!.content
+      ).toBe(content + "\nFirst")
+      expect(
+        result.profiles[0]!.applied.find((r) => r.name === name)!.content
+      ).toBe(content + "\nFirst")
+    }
+  })
+  it("creates independent copies with shared roots and multiple Codex discovery locations", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: shared\ndescription: Shared\n---\n# Shared"
+    await put("shared/source/SKILL.md", content)
+    await put("shared/source/scripts/check.sh", "#!/bin/sh\necho check")
+    await chmod(join(home, "shared/source/scripts/check.sh"), 0o755)
+    await rename(join(home, ".agents/skills"), join(home, "shared/outputs"))
+    await symlink("../shared/outputs", join(home, ".agents/skills"))
+    await symlink("../shared/outputs", join(home, ".claude/skills"))
+    await symlink("../source", join(home, "shared/outputs/shared"))
+    await mkdir(join(home, ".codex/skills"))
+    await symlink(
+      "../../shared/outputs/shared",
+      join(home, ".codex/skills/shared")
+    )
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "shared"
+    )!
+    const updated = {
+      ...skill,
+      content: content + "\nLocal",
+      targets: ["codex"] as const,
+    }
+    await service.saveResource("machine", { ...updated, targets: ["codex"] })
+    const plan = await repository.preview("machine")
+    expect(plan.shared.size).toBe(0)
+    expect(
+      plan.materializations.filter((op) => op.kind === "copy-skill")
+    ).toHaveLength(2)
+    await service.apply("machine")
+    expect(await readFile(join(home, "shared/source/SKILL.md"), "utf8")).toBe(
+      content
+    )
+    expect(await storage.exists(join(home, ".claude/skills/shared"))).toBe(
+      false
+    )
+    for (const root of [".agents/skills/shared", ".codex/skills/shared"]) {
+      expect((await lstat(join(home, root))).isDirectory()).toBe(true)
+      expect(await readFile(join(home, root, "SKILL.md"), "utf8")).toBe(
+        updated.content
+      )
+      expect(
+        (await stat(join(home, root, "scripts/check.sh"))).mode & 0o777
+      ).toBe(0o755)
+    }
+    expect(
+      await readFile(join(home, ".claude/skills/review/SKILL.md"), "utf8")
+    ).toContain("Review changes")
+    const state = await repository.load()
+    expect(changesFor(state.profiles[0]!)).toEqual([])
+    expect(
+      state.profiles[0]!.resources.filter((r) => r.name === "shared")
+    ).toHaveLength(1)
+    const reopened = new LocalRepository(
+      new Machine(home),
+      repository.directory
+    )
+    await reopened.initialize()
+    expect(
+      (await reopened.load()).profiles[0]!.resources.find(
+        (r) => r.name === "shared"
+      )!.content
+    ).toBe(updated.content)
+  })
+  it("rolls back root separation if a later local copy fails", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: shared\ndescription: Shared\n---\n# Shared"
+    await put("shared/skills/shared/SKILL.md", content)
+    await put("shared/skills/other/SKILL.md", "Other")
+    await symlink("../shared/skills", join(home, ".claude/skills"))
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "shared"
+    )!
+    await service.saveResource("machine", {
+      ...skill,
+      content: content + "\nEdit",
+    })
+    const original = materializations.materialize
+    let calls = 0
+    const spy = vi
+      .spyOn(materializations, "materialize")
+      .mockImplementation(async (...args) => {
+        await original(...args)
+        if (++calls === 2) throw new Error("Copy failed")
+      })
+    try {
+      await expect(service.apply("machine")).rejects.toThrow("Copy failed")
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await readlink(join(home, ".claude/skills"))).toBe(
+      "../shared/skills"
+    )
+    expect(
+      await readFile(join(home, "shared/skills/shared/SKILL.md"), "utf8")
+    ).toBe(content)
+    expect(
+      await storage.exists(join(repository.directory, "pending.json"))
+    ).toBe(false)
+  })
+  it("recovers a root replacement interrupted between its two renames", async () => {
+    const { home, put, repository, service } = await fixture()
+    await put(
+      "shared/skills/shared/SKILL.md",
+      "---\nname: shared\ndescription: Shared\n---\nShared"
+    )
+    await symlink("../shared/skills", join(home, ".claude/skills"))
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "shared"
+    )!
+    await service.saveResource("machine", { ...skill, enabled: false })
+    const plan = await repository.preview("machine")
+    const operation = plan.materializations[0]!
+    await writeFile(
+      join(repository.directory, "pending.json"),
+      JSON.stringify({
+        entries: [],
+        moves: [],
+        materializations: plan.materializations,
+      })
+    )
+    await mkdir(join(operation.backup, ".."), { recursive: true })
+    await mkdir(operation.stage, { recursive: true })
+    await rename(operation.path, operation.backup)
+    await repository.initialize()
+    expect(await readlink(join(home, ".claude/skills"))).toBe(
+      "../shared/skills"
+    )
+    expect(await storage.exists(operation.stage)).toBe(false)
+  })
+  it("refuses a changed source or root inventory before materializing", async () => {
+    const { home, put, repository, service } = await fixture()
+    await put(
+      "shared/skills/shared/SKILL.md",
+      "---\nname: shared\ndescription: Shared\n---\nShared"
+    )
+    await symlink("../shared/skills", join(home, ".claude/skills"))
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "shared"
+    )!
+    await service.saveResource("machine", { ...skill, enabled: false })
+    const plan = await repository.preview("machine")
+    const spy = vi.spyOn(repository, "preview").mockResolvedValue(plan)
+    await put("shared/skills/added/SKILL.md", "Added externally")
+    try {
+      await expect(service.apply("machine")).rejects.toThrow(
+        "Skill source changed"
+      )
+    } finally {
+      spy.mockRestore()
+    }
+    expect(await readlink(join(home, ".claude/skills"))).toBe(
+      "../shared/skills"
+    )
+    expect(
+      await readFile(join(home, ".claude/skills/added/SKILL.md"), "utf8")
+    ).toBe("Added externally")
+  })
+  it("preserves an assistant linking directly to another assistant's local skill", async () => {
+    const { home, repository, service } = await fixture()
+    const source = join(home, ".agents/skills/review")
+    const original = await readFile(join(source, "SKILL.md"), "utf8")
+    await mkdir(join(home, ".claude/skills"))
+    await symlink(
+      "../../.agents/skills/review",
+      join(home, ".claude/skills/alias")
+    )
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "review"
+    )!
+    await service.saveResource("machine", {
+      ...skill,
+      content: original + "\nCodex only",
+    })
+    await service.apply("machine")
+    expect(
+      await readFile(join(home, ".claude/skills/alias/SKILL.md"), "utf8")
+    ).toBe(original)
+    expect(await readFile(join(source, "SKILL.md"), "utf8")).toBe(
+      original + "\nCodex only"
+    )
+  })
+  it("can disable the source owner's skill while keeping a linked assistant enabled", async () => {
+    const { home, repository, service } = await fixture()
+    const original = await readFile(
+      join(home, ".agents/skills/review/SKILL.md"),
+      "utf8"
+    )
+    await mkdir(join(home, ".claude/skills"))
+    await symlink(
+      "../../.agents/skills/review",
+      join(home, ".claude/skills/review")
+    )
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "review"
+    )!
+    await service.saveResource("machine", { ...skill, targets: ["claude"] })
+    await service.apply("machine")
+    expect(await storage.exists(join(home, ".agents/skills/review"))).toBe(
+      false
+    )
+    expect(
+      await readFile(join(home, ".claude/skills/review/SKILL.md"), "utf8")
+    ).toBe(original)
+    expect(
+      (await lstat(join(home, ".claude/skills/review"))).isDirectory()
+    ).toBe(true)
+  })
+  it("preserves a chain through the discovery link of a disabled assistant", async () => {
+    const { home, put, repository, service } = await fixture()
+    const content = "---\nname: shared\ndescription: Shared\n---\nShared"
+    await put("shared/skill/SKILL.md", content)
+    await mkdir(join(home, ".claude/skills"))
+    await mkdir(join(home, ".codex/skills"))
+    await symlink("../../shared/skill", join(home, ".claude/skills/shared"))
+    await symlink(
+      "../../.claude/skills/shared",
+      join(home, ".codex/skills/shared")
+    )
+    await repository.refresh()
+    const skill = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "shared"
+    )!
+    await service.saveResource("machine", { ...skill, targets: ["codex"] })
+    await service.apply("machine")
+    expect(await storage.exists(join(home, ".claude/skills/shared"))).toBe(
+      false
+    )
+    expect(
+      await readFile(join(home, ".codex/skills/shared/SKILL.md"), "utf8")
+    ).toBe(content)
+    expect(await readFile(join(home, "shared/skill/SKILL.md"), "utf8")).toBe(
+      content
+    )
+  })
+  it("skips broken, cyclic and outside-home skill links without hiding valid skills", async () => {
+    const { home, put } = await fixture()
+    const outside = await realpath(
+      await mkdtemp(join(tmpdir(), "skill-outside-"))
+    )
+    homes.push(outside)
+    await writeFile(join(outside, "SKILL.md"), "Outside skill")
+    await put(".claude/skills/valid/SKILL.md", "Valid skill")
+    const root = join(home, ".claude/skills")
+    await symlink(".", join(root, "cycle"))
+    await symlink("missing", join(root, "broken"))
+    await symlink("self", join(root, "self"))
+    await symlink(outside, join(root, "outside"))
+    await mkdir(join(root, "outside-file"))
+    await symlink(
+      join(outside, "SKILL.md"),
+      join(root, "outside-file/SKILL.md")
+    )
+    const scan = await new Machine(home).scan()
+    expect(
+      scan.workspace.profiles[0]!.resources.filter((r) => r.kind === "skills")
+        .map((r) => r.name)
+        .toSorted()
+    ).toEqual(["review", "valid"])
+    for (const name of [
+      "cycle",
+      "broken",
+      "self",
+      "outside",
+      "outside-file/SKILL.md",
+    ])
+      expect(
+        scan.workspace.machine!.warnings.some((w) =>
+          w.includes(join(root, name))
+        )
+      ).toBe(true)
+  })
   it("discovers only global configuration, including skill attachments", async () => {
     const { repository } = await fixture()
     const state = await repository.load()
@@ -147,6 +806,213 @@ describe("Real filesystem integration", () => {
     expect(
       (await stat(join(home, ".agent-switch/workspace.json"))).mode & 0o777
     ).toBe(0o600)
+  })
+  it("adds a detected Codex MCP to Claude and removes only the deselected assistant", async () => {
+    const { home, repository, service } = await fixture()
+    const mcp = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.kind === "mcp" && r.name === "local"
+    )!
+    await service.saveResource("machine", {
+      ...mcp,
+      targets: ["codex", "claude"],
+    })
+    expect(changesFor((await repository.load()).profiles[0]!)).toHaveLength(1)
+    await service.apply("machine")
+    const claude = JSON.parse(
+      await readFile(join(home, ".claude.json"), "utf8")
+    )
+    expect(claude.mcpServers.local).toEqual({
+      command: "node",
+      args: ["server.js"],
+    })
+    expect(claude.theme).toBe("dark")
+    expect(claude.mcpServers.docs).toBeDefined()
+    await service.saveResource("machine", { ...mcp, targets: ["claude"] })
+    await service.apply("machine")
+    const codex = TOML.parse(
+      await readFile(join(home, ".codex/config.toml"), "utf8")
+    )
+    expect(codex.mcp_servers).not.toHaveProperty("local")
+    expect(
+      JSON.parse(await readFile(join(home, ".claude.json"), "utf8")).mcpServers
+        .local
+    ).toBeDefined()
+  })
+  it("copies HTTP headers to Claude, survives refresh and preserves Codex options", async () => {
+    const { home, repository, service } = await fixture()
+    const mcp = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "local"
+    )!
+    const content = JSON.stringify({
+      enabled: true,
+      url: "http://localhost:5555/mcp",
+      http_headers: { Authorization: "Bearer fixture-only" },
+      tool_timeout_sec: 30,
+    })
+    await service.saveResource("machine", {
+      ...mcp,
+      content,
+      targets: ["codex", "claude"],
+    })
+    const plan = await repository.preview("machine")
+    expect(plan.has(join(home, ".claude.json"))).toBe(true)
+    await service.apply("machine")
+    expect(
+      JSON.parse(await readFile(join(home, ".claude.json"), "utf8")).mcpServers
+        .local
+    ).toEqual({
+      type: "http",
+      url: "http://localhost:5555/mcp",
+      headers: { Authorization: "Bearer fixture-only" },
+    })
+    expect(
+      (
+        TOML.parse(await readFile(join(home, ".codex/config.toml"), "utf8"))
+          .mcp_servers as TOML.JsonMap
+      ).local
+    ).toEqual(JSON.parse(content))
+    const refreshed = (await repository.refresh()).profiles[0]!
+    expect(refreshed.resources.filter((r) => r.name === "local")).toHaveLength(
+      1
+    )
+    expect(
+      refreshed.resources.find((r) => r.name === "local")!.targets
+    ).toEqual(["codex", "claude"])
+    expect(changesFor(refreshed)).toEqual([])
+    const item = refreshed.resources.find((r) => r.name === "local")!
+    await service.saveResource("machine", { ...item, targets: ["codex"] })
+    await service.apply("machine")
+    expect(
+      JSON.parse(await readFile(join(home, ".claude.json"), "utf8")).mcpServers
+    ).not.toHaveProperty("local")
+    expect(
+      (
+        TOML.parse(await readFile(join(home, ".codex/config.toml"), "utf8"))
+          .mcp_servers as TOML.JsonMap
+      ).local
+    ).toEqual(JSON.parse(content))
+  })
+  it("refuses to overwrite a different MCP already configured for the added assistant", async () => {
+    const { home, repository, service, put } = await fixture()
+    const file = await put(
+      ".claude.json",
+      JSON.stringify({ mcpServers: { local: { command: "other-server" } } })
+    )
+    await repository.refresh()
+    const before = await readFile(file, "utf8")
+    const codexBefore = await readFile(join(home, ".codex/config.toml"), "utf8")
+    const mcp = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "local" && r.targets.includes("codex")
+    )!
+    await service.saveResource("machine", {
+      ...mcp,
+      targets: ["codex", "claude"],
+    })
+    await expect(service.apply("machine")).rejects.toThrow(
+      "Multiple items target"
+    )
+    expect(await readFile(file, "utf8")).toBe(before)
+    expect(await readFile(join(home, ".codex/config.toml"), "utf8")).toBe(
+      codexBefore
+    )
+  })
+  it("copies an HTTP MCP from Claude to Codex", async () => {
+    const { home, repository, service } = await fixture()
+    const mcp = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "docs"
+    )!
+    await service.saveResource("machine", {
+      ...mcp,
+      targets: ["claude", "codex"],
+    })
+    await service.apply("machine")
+    expect(
+      (
+        TOML.parse(await readFile(join(home, ".codex/config.toml"), "utf8"))
+          .mcp_servers as TOML.JsonMap
+      ).docs
+    ).toEqual({ url: "http://127.0.0.1:5555/mcp" })
+    const refreshed = (await repository.refresh()).profiles[0]!
+    expect(refreshed.resources.filter((r) => r.name === "docs")).toHaveLength(1)
+    expect(changesFor(refreshed)).toEqual([])
+  })
+  it("recovers a missing MCP destination previously marked applied", async () => {
+    const { home, repository } = await fixture()
+    const statePath = join(home, ".agent-switch/workspace.json")
+    const state = JSON.parse(await readFile(statePath, "utf8"))
+    for (const resources of [
+      state.currentResources,
+      state.workspace.profiles[0].resources,
+      state.workspace.profiles[0].applied,
+    ])
+      resources.find((r: Resource) => r.name === "local").targets = [
+        "codex",
+        "claude",
+      ]
+    await writeFile(statePath, JSON.stringify(state))
+    const restarted = new LocalRepository(
+      repository.machine,
+      repository.directory
+    )
+    await restarted.initialize()
+    expect(changesFor((await restarted.load()).profiles[0]!)).toHaveLength(1)
+    expect(
+      (await restarted.preview("machine")).has(join(home, ".claude.json"))
+    ).toBe(true)
+    await restarted.apply("machine")
+    expect(
+      JSON.parse(await readFile(join(home, ".claude.json"), "utf8")).mcpServers
+        .local
+    ).toBeDefined()
+  })
+  it("applies an added MCP assistant through the HTTP API using curl", async () => {
+    const { home, repository, service } = await fixture()
+    const mcp = (await repository.load()).profiles[0]!.resources.find(
+      (r) => r.name === "local"
+    )!
+    await service.saveResource("machine", {
+      ...mcp,
+      targets: ["codex", "claude"],
+    })
+    const server = createApi(repository, [])
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    try {
+      const port = (server.address() as AddressInfo).port
+      for (const action of ["plan", "apply"]) {
+        const { stdout } = await promisify(execFile)("curl", [
+          "--silent",
+          "--show-error",
+          "--fail-with-body",
+          "-w",
+          "\n%{http_code}",
+          "-X",
+          "POST",
+          "-H",
+          "x-agent-switch: 1",
+          "-H",
+          `if-match: ${repository.etag()}`,
+          `http://127.0.0.1:${port}/api/profiles/machine/${action}`,
+        ])
+        expect(stdout.endsWith("\n200")).toBe(true)
+        const body = JSON.parse(stdout.slice(0, stdout.lastIndexOf("\n")))
+        if (action === "plan")
+          expect(
+            body.some(
+              (entry: { path: string }) =>
+                entry.path === join(home, ".claude.json")
+            )
+          ).toBe(true)
+        else expect(changesFor(body.profiles[0])).toEqual([])
+      }
+      expect(
+        JSON.parse(await readFile(join(home, ".claude.json"), "utf8"))
+          .mcpServers.local
+      ).toBeDefined()
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve()))
+      )
+    }
   })
   it("merges MCP and hooks without changing unrelated settings", async () => {
     const { home, repository, service } = await fixture()

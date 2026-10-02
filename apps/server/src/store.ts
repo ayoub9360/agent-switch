@@ -14,9 +14,21 @@ import { workspaceSchema } from "@agent-switch/core/schemas"
 import type { WorkspaceRepository } from "@agent-switch/core/ports"
 import { Machine, type Scan, type Plan } from "./machine"
 import { atomicWrite, hash, read, writablePath } from "./files"
-import { moveDirectory, undoMoves, type DirectoryMove } from "./skill-storage"
+import {
+  moveDirectory,
+  undoMoves,
+  checkSkillLinks,
+  type DirectoryMove,
+} from "./skill-storage"
 
 import { retainOpenAiMetadata } from "./skill-files"
+import {
+  checkMaterialization,
+  materialize,
+  undoMaterializations,
+  type Materialization,
+  type SkillTree,
+} from "./skill-materialization"
 
 interface State extends Scan {
   revision: number
@@ -42,7 +54,12 @@ export class LocalRepository implements WorkspaceRepository {
     const pending = await read(join(this.directory, "pending.json"))
     if (pending) {
       const journal = JSON.parse(pending.toString()) as
-        BackupEntry[] | { entries: BackupEntry[]; moves: DirectoryMove[] }
+        | BackupEntry[]
+        | {
+            entries: BackupEntry[]
+            moves: DirectoryMove[]
+            materializations?: Materialization[]
+          }
       const entries = Array.isArray(journal) ? journal : journal.entries
       if (!Array.isArray(journal))
         await undoMoves(this.machine.home, journal.moves)
@@ -60,6 +77,11 @@ export class LocalRepository implements WorkspaceRepository {
           )
       }
       await this.rollback(entries)
+      if (!Array.isArray(journal))
+        await undoMaterializations(
+          this.machine.home,
+          journal.materializations ?? []
+        )
       await rm(join(this.directory, "pending.json"))
     }
     const stored = await read(this.stateFile)
@@ -283,7 +305,15 @@ export class LocalRepository implements WorkspaceRepository {
     if (selected && !changesFor(selected).length) {
       const disabled = selected.resources.filter((r) => !r.enabled)
       selected.resources = [
-        ...currentResources,
+        ...currentResources.map((actual) => {
+          const desired = selected.resources.find(
+            (r) => r.id === actual.id && r.kind === "mcp"
+          )
+          return desired &&
+            desired.targets.some((target) => !actual.targets.includes(target))
+            ? { ...actual, targets: [...desired.targets] }
+            : actual
+        }),
         ...disabled.filter((r) => !currentResources.some((c) => c.id === r.id)),
       ]
     }
@@ -323,6 +353,7 @@ export class LocalRepository implements WorkspaceRepository {
           ...structuredClone(desired),
           content: actual.content,
           enabled: actual.enabled,
+          targets: [...actual.targets],
         }
         if (actual.files) baseline.files = structuredClone(actual.files)
         else delete baseline.files
@@ -364,7 +395,10 @@ export class LocalRepository implements WorkspaceRepository {
     })
     return this.load()
   }
-  async preview(profileId: string) {
+  async preview(
+    profileId: string,
+    skillEditMode: "local" | "shared" = "local"
+  ) {
     const profile = this.state.workspace.profiles.find(
       (p) => p.id === profileId
     )
@@ -373,11 +407,13 @@ export class LocalRepository implements WorkspaceRepository {
       profile,
       this.state.bindings,
       this.state.fingerprints,
-      this.directory
+      this.directory,
+      skillEditMode
     )
   }
   private async rollback(entries: BackupEntry[]) {
     for (const entry of [...entries].reverse()) {
+      await writablePath(this.machine.home, entry.file)
       if (entry.before === null) await rm(entry.file, { force: true })
       else {
         await atomicWrite(entry.file, Buffer.from(entry.before, "base64"))
@@ -386,6 +422,9 @@ export class LocalRepository implements WorkspaceRepository {
     }
   }
   private async transaction(plan: Plan) {
+    await checkSkillLinks(this.machine.home, plan.links)
+    for (const operation of plan.materializations)
+      await checkMaterialization(this.machine.home, operation)
     const entries: BackupEntry[] = []
     for (const [file, expected] of plan.expected) {
       const bytes = await read(file)
@@ -412,13 +451,30 @@ export class LocalRepository implements WorkspaceRepository {
       "backups",
       `${Date.now()}-${randomUUID()}.json`
     )
-    await atomicWrite(backup, JSON.stringify({ entries, moves: plan.moves }))
+    const journal = JSON.stringify({
+      entries,
+      moves: plan.moves,
+      materializations: plan.materializations,
+    })
+    await atomicWrite(backup, journal)
     const pending = join(this.directory, "pending.json")
-    await atomicWrite(pending, JSON.stringify({ entries, moves: plan.moves }))
+    await atomicWrite(pending, journal)
+    const persistentLinks = plan.links.filter(
+      (link) =>
+        !plan.materializations.some(
+          (operation) =>
+            link.currentPath === operation.path ||
+            link.currentPath.startsWith(operation.path + "/")
+        )
+    )
     const written: BackupEntry[] = []
     const moved: DirectoryMove[] = []
     try {
+      for (const operation of plan.materializations)
+        await materialize(this.machine.home, operation)
       for (const [file, after] of plan) {
+        await checkSkillLinks(this.machine.home, persistentLinks)
+        await writablePath(this.machine.home, file)
         const entry = entries.find((e) => e.file === file)!
         const current = await read(file)
         if (
@@ -433,6 +489,7 @@ export class LocalRepository implements WorkspaceRepository {
           if (plan.modes.has(file)) await chmod(file, plan.modes.get(file)!)
         }
       }
+      await checkSkillLinks(this.machine.home, persistentLinks)
       for (const move of plan.moves) {
         for (const [file, original] of plan.expected) {
           if (!file.startsWith(move.from + "/")) continue
@@ -453,15 +510,46 @@ export class LocalRepository implements WorkspaceRepository {
     } catch (error) {
       await undoMoves(this.machine.home, moved)
       await this.rollback(written)
+      await undoMaterializations(this.machine.home, plan.materializations)
       await rm(pending, { force: true })
       throw error
     }
     await rm(pending, { force: true })
   }
-  async apply(profileId: string) {
-    const plan = await this.preview(profileId)
+  async apply(profileId: string, skillEditMode: "local" | "shared" = "local") {
+    const plan = await this.preview(profileId, skillEditMode)
+    const pending = structuredClone(this.state.workspace)
+    const profile = pending.profiles.find((p) => p.id === profileId)!
+    for (const resource of profile.resources.filter(
+      (r) => r.kind === "skills"
+    )) {
+      for (const location of this.state.bindings[resource.id]?.skillLocations ??
+        []) {
+        const file = location.linked?.file ?? location.file
+        const content = plan.get(file)
+        if (content && plan.shared.has(file))
+          resource.content = content.toString()
+        const root = location.linked?.root ?? location.assetRoot
+        for (const [path, bytes] of plan) {
+          if (!plan.shared.has(path) || !path.startsWith(root + "/")) continue
+          const name = path.slice(root.length + 1)
+          if (name === "SKILL.md") continue
+          if (bytes) {
+            resource.files ??= {}
+            resource.files[name] = bytes.toString("base64")
+            if (plan.modes.has(path)) {
+              resource.fileModes ??= {}
+              resource.fileModes[name] = plan.modes.get(path)!
+            }
+          } else {
+            delete resource.files?.[name]
+            delete resource.fileModes?.[name]
+          }
+        }
+      }
+    }
     const workspace = recordApplication(
-      this.state.workspace,
+      pending,
       profileId,
       randomUUID(),
       new Date().toISOString()
@@ -476,9 +564,39 @@ export class LocalRepository implements WorkspaceRepository {
       currentResources,
       revision: this.state.revision + 1,
       fingerprints: { ...this.state.fingerprints },
+      bindings: structuredClone(this.state.bindings),
     }
+    for (const binding of Object.values(next.bindings)) {
+      for (const location of binding.skillLocations ?? []) {
+        if (plan.rebindings.has(location.file))
+          location.linked = plan.rebindings.get(location.file)
+      }
+    }
+    const fingerprintTree = (path: string, tree: SkillTree) => {
+      if (tree.kind === "file")
+        next.fingerprints[path] = hash(Buffer.from(tree.data, "base64"))
+      else if (tree.kind === "directory")
+        for (const [name, child] of Object.entries(tree.children))
+          fingerprintTree(join(path, name), child)
+    }
+    for (const operation of plan.materializations)
+      if (operation.kind === "copy-skill")
+        fingerprintTree(operation.path, operation.tree)
     for (const [file, content] of plan)
       next.fingerprints[file] = content ? hash(content) : null
+    for (const binding of Object.values(next.bindings))
+      for (const location of binding.skillLocations ?? []) {
+        if (!location.linked) continue
+        for (const [file, content] of plan) {
+          const alias =
+            file === location.linked.file
+              ? location.file
+              : file.startsWith(location.linked.root + "/")
+                ? location.assetRoot + file.slice(location.linked.root.length)
+                : null
+          if (alias) next.fingerprints[alias] = content ? hash(content) : null
+        }
+      }
     for (const move of plan.moves)
       for (const [file, fingerprint] of Object.entries(next.fingerprints))
         if (file.startsWith(move.from + "/")) {
@@ -489,6 +607,6 @@ export class LocalRepository implements WorkspaceRepository {
     plan.set(this.stateFile, Buffer.from(JSON.stringify(next, null, 2)))
     await this.transaction(plan)
     this.state = next
-    return this.load()
+    return plan.materializations.length ? this.refresh() : this.load()
   }
 }

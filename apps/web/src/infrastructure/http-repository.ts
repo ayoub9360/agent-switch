@@ -1,6 +1,8 @@
 import type {
   WorkspaceRepository,
   ConfigurationDiscovery,
+  PlannedFile,
+  SkillEditMode,
 } from "@/application/ports"
 import type { Workspace, Resource } from "@/domain/workspace"
 import { workspaceSchema } from "./schemas"
@@ -51,11 +53,12 @@ export class LocalApi implements WorkspaceRepository, ConfigurationDiscovery {
   async save(workspace: Workspace) {
     await this.request("/workspace", "PUT", workspace)
   }
-  async apply(profileId: string) {
+  async apply(profileId: string, skillEditMode: SkillEditMode = "local") {
     return workspaceSchema.parse(
       await this.request(
         `/profiles/${encodeURIComponent(profileId)}/apply`,
-        "POST"
+        "POST",
+        { skillEditMode }
       )
     )
   }
@@ -73,10 +76,11 @@ export class LocalApi implements WorkspaceRepository, ConfigurationDiscovery {
       await this.request("/import-machine", "POST", input)
     )
   }
-  async plan(profileId: string) {
-    return this.request<{ path: string; action: string; bytes: number }[]>(
+  async plan(profileId: string, skillEditMode: SkillEditMode = "local") {
+    return this.request<PlannedFile[]>(
       `/profiles/${encodeURIComponent(profileId)}/plan`,
-      "POST"
+      "POST",
+      { skillEditMode }
     )
   }
   async testMcp(content: string) {

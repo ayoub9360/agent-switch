@@ -132,6 +132,80 @@ describe("Frontend user journeys", () => {
     )
     expect(state().profiles[0]!.history).toHaveLength(2)
   })
+  it("distinguishes link moves from shared source edits during review", async () => {
+    const { user, controller } = await setup()
+    vi.spyOn(controller.discovery, "plan").mockResolvedValue([
+      {
+        path: "/home/shared/skill/SKILL.md",
+        action: "write",
+        bytes: 20,
+        sharedTargets: ["claude", "codex"],
+      },
+      {
+        path: "/home/.claude/skills/skill",
+        destination: "/home/.agent-switch/disabled-skills/skill",
+        action: "move-link",
+        bytes: 0,
+      },
+    ])
+    await user.click(screen.getByRole("button", { name: /pending changes/ }))
+    const dialog = screen.getByRole("dialog")
+    expect(await within(dialog).findByText("Move link")).toBeVisible()
+    expect(
+      within(dialog).getByText(/shared source.*Claude Code and Codex/)
+    ).toBeVisible()
+    expect(
+      within(dialog).getByText(/Only the discovery link is moved/)
+    ).toBeVisible()
+    expect(
+      within(dialog).getByText(/Destination:.*disabled-skills/)
+    ).toBeVisible()
+  })
+  it("defaults to local copies and requires an explicit choice for shared editing", async () => {
+    const { user, controller, state } = await setup((workspace) => {
+      workspace.profiles[0]!.resources.find(
+        (resource) => resource.kind === "skills"
+      )!.content += "\nEdited"
+    })
+    const plan = vi
+      .spyOn(controller.discovery, "plan")
+      .mockImplementation(async (_id, mode) =>
+        mode === "shared"
+          ? [
+              {
+                path: "/home/shared/SKILL.md",
+                action: "write",
+                bytes: 20,
+                sharedTargets: ["claude", "codex"],
+              },
+            ]
+          : [
+              {
+                path: "/home/.claude/skills/shared",
+                action: "copy-skill",
+                bytes: 0,
+              },
+            ]
+      )
+    const apply = vi.spyOn(controller.service, "apply")
+    await user.click(screen.getByRole("button", { name: /pending changes/ }))
+    const dialog = screen.getByRole("dialog")
+    expect(await within(dialog).findByText("Local copy")).toBeVisible()
+    expect(plan).toHaveBeenLastCalledWith(state().profiles[0]!.id, "local")
+    const toggle = within(dialog).getByRole("switch", {
+      name: /Edit shared sources/,
+    })
+    expect(toggle).not.toBeChecked()
+    await user.click(toggle)
+    expect(
+      await within(dialog).findByText(/This edits the shared source/)
+    ).toBeVisible()
+    expect(plan).toHaveBeenLastCalledWith(state().profiles[0]!.id, "shared")
+    await user.click(
+      within(dialog).getByRole("button", { name: "Apply to this machine" })
+    )
+    expect(apply).toHaveBeenCalledWith(state().profiles[0]!.id, "shared")
+  })
   it("copies instructions through an editable comparison without applying them", async () => {
     const { user, state } = await setup()
     const before = structuredClone(state().profiles[0]!.applied)

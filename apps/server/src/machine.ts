@@ -1,6 +1,14 @@
 import { readdir, stat, realpath, lstat, readlink } from "node:fs/promises"
 import { join, basename, dirname, resolve } from "node:path"
 import { hostname } from "node:os"
+import {
+  localSkillParents,
+  traversesSkillPath,
+  virtualSkillEntry,
+  materialization,
+  setSkillFile,
+  type Materialization,
+} from "./skill-materialization"
 import { isDeepStrictEqual } from "node:util"
 import * as TOML from "@iarna/toml"
 import type {
@@ -12,7 +20,15 @@ import type {
 import { instructionRole } from "@agent-switch/core/instructions"
 import { changesFor, validateResource } from "@agent-switch/core/workspace"
 import { read, hash, inside, writablePath } from "./files"
-import { archivedSkill, exists, type DirectoryMove } from "./skill-storage"
+import {
+  archivedSkill,
+  exists,
+  inspectSkill,
+  checkSkillLinks,
+  type LinkedSkill,
+  type LinkCheck,
+  type DirectoryMove,
+} from "./skill-storage"
 
 import {
   distributeSkillFile,
@@ -31,8 +47,15 @@ export interface Binding {
   profilePath?: string
   assetRoot?: string
   target?: Assistant
+  linked?: LinkedSkill
   instructionRole?: Resource["instructionRole"]
-  skillLocations?: { target: Assistant; file: string; assetRoot: string }[]
+  mcpLocations?: Binding[]
+  skillLocations?: {
+    target: Assistant
+    file: string
+    assetRoot: string
+    linked?: LinkedSkill
+  }[]
 }
 export interface Scan {
   workspace: Workspace
@@ -43,6 +66,10 @@ export class Plan extends Map<string, Buffer | null> {
   moves: DirectoryMove[] = []
   modes = new Map<string, number>()
   expected = new Map<string, string | null>()
+  links: LinkCheck[] = []
+  shared = new Map<string, Assistant[]>()
+  materializations: Materialization[] = []
+  rebindings = new Map<string, LinkedSkill | undefined>()
 }
 export function object(value: unknown): Document {
   if (!value || typeof value !== "object" || Array.isArray(value))
@@ -52,6 +79,42 @@ export function object(value: unknown): Document {
 export function parseDocument(text: string, format: Binding["format"]) {
   return object(format === "toml" ? TOML.parse(text) : JSON.parse(text))
 }
+function mcpContent(content: string, target: Assistant): string {
+  const config = object(JSON.parse(content))
+  if (target === "claude") {
+    if (config.bearer_token_env_var || config.env_http_headers)
+      throw new Error(
+        "Configure environment-based HTTP authentication for Claude before copying this MCP."
+      )
+    if (config.http_headers) {
+      config.headers = config.http_headers
+      delete config.http_headers
+    }
+    if (config.url && !config.type) config.type = "http"
+    for (const key of [
+      "enabled",
+      "required",
+      "startup_timeout_sec",
+      "startup_timeout_ms",
+      "tool_timeout_sec",
+      "enabled_tools",
+      "disabled_tools",
+    ])
+      delete config[key]
+  } else {
+    if (config.type === "sse")
+      throw new Error(
+        "This SSE MCP needs a compatible HTTP or stdio configuration for Codex."
+      )
+    if (config.headers) {
+      config.http_headers = config.headers
+      delete config.headers
+    }
+    delete config.type
+  }
+  return JSON.stringify(config, null, 2)
+}
+
 export class Machine {
   constructor(
     readonly home: string,
@@ -118,6 +181,7 @@ export class Machine {
           const walk = async (dir: string) => {
             for (const entry of await readdir(dir, { withFileTypes: true })) {
               const file = join(dir, entry.name)
+              if (file === binding.file) continue
               if (entry.isSymbolicLink()) {
                 warnings.push(`Skipped skill symlink: ${file}`)
                 continue
@@ -127,6 +191,8 @@ export class Machine {
                 resource.fileModes![file.slice(binding.assetRoot!.length + 1)] =
                   (await stat(file)).mode & 0o777
                 const bytes = await load(file)
+                if (binding.linked && bytes)
+                  fingerprints[await realpath(file)] = hash(bytes)
                 if (bytes && bytes.length <= 5_000_000)
                   resource.files![file.slice(binding.assetRoot!.length + 1)] =
                     bytes.toString("base64")
@@ -138,7 +204,12 @@ export class Machine {
         }
         if (kind === "skills") {
           binding.skillLocations = [
-            { target, file: binding.file, assetRoot: binding.assetRoot! },
+            {
+              target,
+              file: binding.file,
+              assetRoot: binding.assetRoot!,
+              linked: binding.linked,
+            },
           ]
           const same = resources.find(
             (r) =>
@@ -173,6 +244,31 @@ export class Machine {
               ?.replace(/^["']|["']$/g, "")
               .slice(0, 500) ?? "Global skill"
         }
+        if (kind === "mcp") {
+          binding.mcpLocations = [{ ...binding }]
+          const comparable = (text: string) => {
+            try {
+              const config = object(JSON.parse(mcpContent(text, "claude")))
+              if (config.type === "stdio") delete config.type
+              return config
+            } catch {
+              return object(JSON.parse(text))
+            }
+          }
+          const same = resources.find(
+            (r) =>
+              r.kind === "mcp" &&
+              r.name === name &&
+              r.enabled === resource.enabled &&
+              !r.targets.includes(target) &&
+              isDeepStrictEqual(comparable(r.content), comparable(content))
+          )
+          if (same) {
+            same.targets.push(target)
+            bindings[same.id]!.mcpLocations!.push(...binding.mcpLocations)
+            return
+          }
+        }
         bindings[id] = { ...binding, profilePath: "" }
         const shared = resources.find((r) => r.id === id)
         if (shared) {
@@ -192,6 +288,11 @@ export class Machine {
       ) => {
         const location = await resolveFile(file)
         const bytes = await load(location.file)
+        const linked =
+          kind === "skills" && bytes
+            ? await inspectSkill(this.home, dirname(file))
+            : undefined
+        if (linked && bytes) fingerprints[linked.file] = hash(bytes)
         if (bytes)
           await add(
             {
@@ -199,7 +300,7 @@ export class Machine {
               format: "text",
               ...(kind === "instructions" ? { instructionRole: role } : {}),
               ...(kind === "skills"
-                ? { assetRoot: dirname(location.file) }
+                ? { file, assetRoot: dirname(file), linked }
                 : {}),
             },
             kind,
@@ -219,7 +320,8 @@ export class Machine {
         dir: string,
         target: Assistant,
         kind: "skills" | "instructions",
-        depth = 0
+        depth = 0,
+        ancestors = new Set<string>()
       ) => {
         if (depth > 8) return
         try {
@@ -228,19 +330,32 @@ export class Machine {
             warnings.push(`Skipped folder outside the home directory: ${dir}`)
             return
           }
+          if (ancestors.has(actual)) {
+            warnings.push(`Skipped cyclic folder symlink: ${dir}`)
+            return
+          }
+          const parents = new Set([...ancestors, actual])
           for (const entry of await readdir(dir, { withFileTypes: true })) {
             const path = join(dir, entry.name)
-            if (entry.isDirectory())
-              await directory(path, target, kind, depth + 1)
-            else if (
-              entry.isFile() &&
-              (kind === "skills"
-                ? entry.name === "SKILL.md"
-                : entry.name.endsWith(".md"))
-            )
-              await textFile(path, target, kind)
-            else if (entry.isSymbolicLink())
-              warnings.push(`Unsupported symlink: ${path}`)
+            try {
+              const info =
+                kind === "skills" && entry.isSymbolicLink()
+                  ? await stat(path)
+                  : entry
+              if (info.isDirectory())
+                await directory(path, target, kind, depth + 1, parents)
+              else if (
+                info.isFile() &&
+                (kind === "skills"
+                  ? entry.name === "SKILL.md"
+                  : entry.name.endsWith(".md"))
+              )
+                await textFile(path, target, kind)
+              else if (entry.isSymbolicLink())
+                warnings.push(`Unsupported symlink: ${path}`)
+            } catch (error) {
+              warn(error)
+            }
           }
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
@@ -273,7 +388,7 @@ export class Machine {
         if (servers && typeof servers === "object")
           for (const [name, config] of Object.entries(servers)) {
             await add(
-              { ...location, format, keys: [...mcpPath, name] },
+              { ...location, format, target, keys: [...mcpPath, name] },
               "mcp",
               target,
               name,
@@ -387,6 +502,7 @@ export class Machine {
         )
         if (locations?.length)
           return locations.map((l) => ({
+            linked: l.linked,
             file: l.file,
             assetRoot: l.assetRoot,
             target,
@@ -417,17 +533,50 @@ export class Machine {
         ]
       })
     }
+    if (resource.kind === "mcp") {
+      const locations = old?.mcpLocations ?? (old ? [old] : [])
+      return resource.targets.map((target): Binding => {
+        const existing = locations.find(
+          (location) =>
+            (location.target ??
+              (location.keys?.[0] === "mcp_servers" ||
+              inside(this.codexHome, location.alias ?? location.file)
+                ? "codex"
+                : "claude")) === target
+        )
+        if (existing)
+          return {
+            ...existing,
+            target,
+            keys: [...existing.keys!.slice(0, -1), resource.name],
+          }
+        const file =
+          target === "codex"
+            ? join(this.codexHome, "config.toml")
+            : join(this.home, ".claude.json")
+        const known = Object.values(bindings).find(
+          (binding) => binding.alias === file
+        )
+        return {
+          file: known?.file ?? file,
+          alias: known?.alias,
+          linkTarget: known?.linkTarget,
+          target,
+          format: target === "codex" ? "toml" : "json",
+          keys: [
+            target === "codex" ? "mcp_servers" : "mcpServers",
+            resource.name,
+          ],
+        }
+      })
+    }
     // Source bindings are generated by discovery, never accepted from portable files.
     if (
       old &&
       !old.profilePath &&
       resource.source === old.file + (old.keys ? `#${old.keys.join(".")}` : "")
     )
-      return [
-        resource.kind === "mcp"
-          ? { ...old, keys: [...old.keys!.slice(0, -1), resource.name] }
-          : old,
-      ]
+      return [old]
     const slug =
       resource.name
         .toLowerCase()
@@ -435,18 +584,6 @@ export class Machine {
         .replace(/^-|-$/g, "") || resource.id
     const destinations: Binding[] = resource.targets.map((target): Binding => {
       const configDir = target === "codex" ? this.codexHome : this.claudeHome
-      if (resource.kind === "mcp")
-        return target === "codex"
-          ? {
-              file: join(configDir, "config.toml"),
-              format: "toml",
-              keys: ["mcp_servers", resource.name],
-            }
-          : {
-              file: join(this.home, ".claude.json"),
-              format: "json",
-              keys: ["mcpServers", resource.name],
-            }
       if (resource.kind === "hooks")
         return {
           file: join(
@@ -490,7 +627,8 @@ export class Machine {
     profile: Profile,
     bindings: Scan["bindings"],
     fingerprints: Scan["fingerprints"],
-    storage = join(this.home, ".agent-switch")
+    storage = join(this.home, ".agent-switch"),
+    skillEditMode: "local" | "shared" = "local"
   ): Promise<Plan> {
     const plan: Plan = new Plan(),
       touched = new Set<string>()
@@ -579,6 +717,9 @@ export class Machine {
       }
     }
     const changes = changesFor(profile)
+    const knownLocations = Object.values(bindings).flatMap(
+      (b) => b.skillLocations ?? []
+    )
     // Skills are stored as complete directories outside the assistants' discovery roots.
     const skillSlots = new Map<
       string,
@@ -594,6 +735,75 @@ export class Machine {
           slot[side] = resource
           skillSlots.set(binding.file, slot)
         }
+    const preserveLinkedPeers = async (
+      root: string,
+      file: string,
+      throughLinks = false
+    ) => {
+      for (const peer of knownLocations) {
+        if (!peer.linked || peer.file === file) continue
+        let affected = !throughLinks && inside(root, peer.linked.file)
+        if (throughLinks)
+          for (const link of peer.linked.links) {
+            if (
+              await traversesSkillPath(
+                this.home,
+                resolve(dirname(link.path), link.target),
+                root
+              )
+            )
+              affected = true
+          }
+        if (!affected) continue
+        const peerArchive = archivedSkill(storage, peer.assetRoot)
+        const peerActive = await exists(peer.assetRoot)
+        const location = peerActive ? peer.assetRoot : peerArchive
+        if (
+          !(await exists(location)) ||
+          plan.materializations.some(
+            (op) => op.path === location && op.kind === "copy-skill"
+          )
+        )
+          continue
+        if (peerActive)
+          await localSkillParents(
+            this.home,
+            storage,
+            peer.assetRoot,
+            plan.materializations
+          )
+        const rootLink = peer.linked.links.find(
+          (link) => link.path === peer.linked!.entry
+        )
+        const rawLink = peerActive
+          ? (virtualSkillEntry(peer.assetRoot, plan.materializations) ??
+            rootLink?.target)
+          : rootLink?.target
+        const copy = await materialization(
+          this.home,
+          storage,
+          location,
+          peer.linked.root,
+          "copy-skill",
+          rawLink
+        )
+        const slot = skillSlots.get(peer.file)
+        const desired = slot?.after ?? slot?.before
+        if (desired) {
+          setSkillFile(
+            copy.tree,
+            "SKILL.md",
+            Buffer.from(desired.content).toString("base64")
+          )
+          for (const [name, data] of Object.entries(desired.files ?? {}))
+            setSkillFile(copy.tree, name, data, desired.fileModes?.[name])
+        }
+        plan.materializations.push(copy)
+        plan.rebindings.set(peer.file, undefined)
+        for (const move of plan.moves)
+          if (move.from === location) move.linkTarget = undefined
+      }
+    }
     for (const { binding, before, after } of skillSlots.values()) {
       if (
         !changes.some(
@@ -603,7 +813,229 @@ export class Machine {
         )
       )
         continue
+      if (binding.linked) {
+        const linked = binding.linked
+        const rootLink = linked.links.find((link) => link.path === linked.entry)
+        const archive = archivedSkill(storage, binding.assetRoot!)
+        const archived = await exists(archive)
+        const active = await exists(binding.assetRoot!)
+        if (archived === active)
+          throw new Error(
+            `Skill location changed: ${binding.assetRoot}. Refresh the configuration.`
+          )
+        const relocated = (file: string) =>
+          archived && !rootLink && inside(linked.entry, file)
+            ? archive + file.slice(linked.entry.length)
+            : file
+        const checks = linked.links.map((link) => ({
+          ...link,
+          currentPath:
+            archived && link.path === linked.entry
+              ? archive
+              : relocated(link.path),
+          targetPath: relocated(resolve(dirname(link.path), link.target)),
+          resolved: relocated(link.resolved),
+        }))
+        await checkSkillLinks(this.home, checks)
+        plan.links.push(...checks)
+        const previousResource = profile.applied.find(
+          (r) => r.id === (after ?? before)!.id
+        )
+        const contentChanged = Boolean(
+          after &&
+          (!previousResource ||
+            previousResource.content !== after.content ||
+            !isDeepStrictEqual(previousResource.files, after.files) ||
+            !isDeepStrictEqual(previousResource.fileModes, after.fileModes))
+        )
+        if (skillEditMode === "local" || !contentChanged || !after?.enabled) {
+          if (
+            !contentChanged &&
+            Boolean(before?.enabled) === Boolean(after?.enabled)
+          )
+            continue
+          const root = binding.assetRoot!
+          if (!after?.enabled && active)
+            await preserveLinkedPeers(root, binding.file, true)
+          if (active || after?.enabled)
+            await localSkillParents(
+              this.home,
+              storage,
+              root,
+              plan.materializations
+            )
+          const virtualLink = virtualSkillEntry(root, plan.materializations)
+          const entryLink = archived
+            ? rootLink?.target
+            : (virtualLink ?? rootLink?.target)
+          const location = archived ? archive : root
+          const preparedCopy = plan.materializations.some(
+            (op) => op.kind === "copy-skill" && op.path === location
+          )
+          if (contentChanged && after && !preparedCopy) {
+            validateResource(after)
+            for (const [file, expected] of Object.entries(fingerprints)) {
+              if (file !== linked.file && !file.startsWith(linked.root + "/"))
+                continue
+              const bytes = await read(file)
+              if ((bytes ? hash(bytes) : null) !== expected)
+                throw new Error(
+                  `Skill file changed: ${file}. Refresh before applying.`
+                )
+              plan.expected.set(file, expected)
+            }
+            const source = archived && !rootLink ? archive : linked.root
+            const copy = await materialization(
+              this.home,
+              storage,
+              location,
+              source,
+              "copy-skill",
+              entryLink
+            )
+            setSkillFile(
+              copy.tree,
+              "SKILL.md",
+              Buffer.from(after.content).toString("base64")
+            )
+            for (const [name, data] of Object.entries(after.files ?? {}))
+              setSkillFile(copy.tree, name, data, after.fileModes?.[name])
+            plan.materializations.push(copy)
+            plan.rebindings.set(binding.file, undefined)
+          } else if (virtualLink && !preparedCopy) {
+            plan.rebindings.set(binding.file, {
+              ...linked,
+              entry: root,
+              links: [
+                { path: root, target: virtualLink, resolved: linked.root },
+                ...linked.links.filter((link) =>
+                  inside(linked.root, link.path)
+                ),
+              ],
+            })
+          }
+          const linkTarget =
+            contentChanged || preparedCopy ? undefined : entryLink
+          if (after?.enabled && archived)
+            plan.moves.push({ from: archive, to: root, linkTarget })
+          else if (!after?.enabled && active)
+            plan.moves.push({ from: root, to: archive, linkTarget })
+          continue
+        }
+        const peers = [...skillSlots.values()].filter(
+          (slot) =>
+            (slot.binding.linked?.entry ?? slot.binding.assetRoot) ===
+            linked.entry
+        )
+        if (
+          peers.some(
+            (slot) =>
+              !slot.binding.linked &&
+              Boolean(slot.after?.enabled) !== Boolean(after?.enabled)
+          )
+        )
+          throw new Error(
+            `This skill uses the same discovery folder for multiple assistants: ${binding.assetRoot}. It must be enabled or disabled for all of them together.`
+          )
+        const owner = after ?? before!
+        const previous = profile.applied.find((r) => r.id === owner.id)
+        for (const [path, expected] of Object.entries(fingerprints)) {
+          if (
+            path !== linked.file &&
+            !path.startsWith(linked.root + "/") &&
+            !(archived && !rootLink && path.startsWith(archive + "/"))
+          )
+            continue
+          const file = relocated(path)
+          if (file !== path) continue
+          const bytes = await read(file)
+          if ((bytes ? hash(bytes) : null) !== expected)
+            throw new Error(
+              `Skill file changed: ${file}. Refresh before applying.`
+            )
+          plan.expected.set(file, expected)
+        }
+        if (after) {
+          validateResource(after)
+          const write = async (name: string, bytes: Buffer, mode?: number) => {
+            const path = resolve(linked.root, name)
+            if (!inside(linked.root, path))
+              throw new Error("Invalid skill path.")
+            const file = relocated(name === "SKILL.md" ? linked.file : path)
+            await writablePath(this.home, file)
+            const old = await read(file)
+            const expected = fingerprints[file]
+            if (
+              expected === undefined ||
+              (old ? hash(old) : null) !== expected
+            ) {
+              if (old || expected !== undefined)
+                throw new Error(
+                  `Skill file changed: ${file}. Refresh before applying.`
+                )
+            }
+            if (plan.has(file) && !plan.get(file)?.equals(bytes))
+              throw new Error(
+                `Conflicting edits to the shared skill file: ${file}`
+              )
+            plan.expected.set(file, old ? hash(old) : null)
+            plan.set(file, bytes)
+            if (mode !== undefined) plan.modes.set(file, mode)
+            const targets = knownLocations
+              .filter((l) => (l.linked?.file ?? l.file) === linked.file)
+              .map((l) => l.target)
+            plan.shared.set(file, [...new Set(targets)])
+          }
+          if (!previous || previous.content !== after.content)
+            await write("SKILL.md", Buffer.from(after.content))
+          for (const [name, data] of Object.entries(after.files ?? {}))
+            if (
+              previous?.files?.[name] !== data ||
+              previous?.fileModes?.[name] !== after.fileModes?.[name]
+            )
+              await write(
+                name,
+                Buffer.from(data, "base64"),
+                after.fileModes?.[name] ?? 0o600
+              )
+        }
+        const move =
+          after?.enabled && archived
+            ? { from: archive, to: linked.entry, linkTarget: rootLink?.target }
+            : !after?.enabled && active
+              ? {
+                  from: linked.entry,
+                  to: archive,
+                  linkTarget: rootLink?.target,
+                }
+              : null
+        if (
+          move &&
+          !rootLink &&
+          !after?.enabled &&
+          knownLocations.some(
+            (l) =>
+              l.linked &&
+              l.linked.entry !== linked.entry &&
+              inside(linked.entry, l.linked.file)
+          )
+        )
+          throw new Error(
+            `Cannot archive a shared source folder: ${linked.entry}. Disable its discovery links instead.`
+          )
+        if (move && !plan.moves.some((m) => m.from === move.from))
+          plan.moves.push(move)
+        continue
+      }
       const root = binding.assetRoot!
+      const sourceWillChange =
+        !after?.enabled ||
+        !before ||
+        before.content !== after.content ||
+        !isDeepStrictEqual(before.files, after.files) ||
+        !isDeepStrictEqual(before.fileModes, after.fileModes)
+      if ((skillEditMode === "local" && sourceWillChange) || !after?.enabled)
+        await preserveLinkedPeers(root, binding.file)
       const archive = archivedSkill(storage, root)
       const archived = await exists(archive)
       const active = await exists(root)
@@ -641,6 +1073,10 @@ export class Machine {
           if (old && !before && !archived)
             throw new Error(`A skill file already exists: ${file}`)
           plan.expected.set(file, old ? hash(old) : null)
+          if (plan.has(file) && !plan.get(file)?.equals(bytes))
+            throw new Error(
+              `Conflicting edits to the shared skill file: ${file}`
+            )
           plan.set(file, bytes)
           if (mode !== undefined) plan.modes.set(file, mode)
         }
@@ -665,7 +1101,13 @@ export class Machine {
             )
       }
       // Clean up older complete copies only when applying this skill. The transaction backs up the file.
-      if (after?.enabled && binding.target === "claude") {
+      if (
+        after?.enabled &&
+        binding.target === "claude" &&
+        !knownLocations.some(
+          (l) => l.target === "codex" && l.linked?.root === root
+        )
+      ) {
         const metadata = join(location, OPENAI_SKILL_METADATA)
         await writablePath(this.home, metadata)
         const bytes = await read(metadata)
@@ -676,8 +1118,20 @@ export class Machine {
       }
       if (after?.enabled && archived)
         plan.moves.push({ from: archive, to: root })
-      else if (!after?.enabled && active)
+      else if (!after?.enabled && active) {
+        if (
+          knownLocations.some(
+            (l) =>
+              l.linked &&
+              inside(root, l.linked.file) &&
+              !plan.rebindings.has(l.file)
+          )
+        )
+          throw new Error(
+            `Cannot archive a shared source folder: ${root}. Disable its discovery links instead.`
+          )
         plan.moves.push({ from: root, to: archive })
+      }
     }
     // Remove old slots before writing new slots, including when IDs differ between profiles.
     for (const change of changes)
@@ -698,7 +1152,8 @@ export class Machine {
         before &&
         after &&
         bindings[before.id] &&
-        (JSON.stringify(before.targets) !== JSON.stringify(after.targets) ||
+        ((after.kind !== "mcp" &&
+          JSON.stringify(before.targets) !== JSON.stringify(after.targets)) ||
           before.scope !== after.scope)
       )
         throw new Error(
@@ -711,7 +1166,9 @@ export class Machine {
         for (const binding of this.destinations(after, profile, bindings)) {
           await patch(
             binding,
-            after.content,
+            after.kind === "mcp"
+              ? mcpContent(after.content, binding.target!)
+              : after.content,
             previous.some(
               (p) =>
                 p.file === binding.file &&
@@ -727,6 +1184,19 @@ export class Machine {
         (bytes === null && old === null)
       )
         plan.delete(file)
+    }
+    if (skillEditMode === "shared") {
+      for (const file of plan.keys()) {
+        const owners = knownLocations.filter(
+          (location) =>
+            (location.linked?.file ?? location.file) === file ||
+            file.startsWith((location.linked?.root ?? location.assetRoot) + "/")
+        )
+        if (owners.some((location) => location.linked))
+          plan.shared.set(file, [
+            ...new Set(owners.map((location) => location.target)),
+          ])
+      }
     }
     return plan
   }

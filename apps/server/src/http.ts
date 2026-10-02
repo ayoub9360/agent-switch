@@ -105,19 +105,33 @@ export function createApi(
         )
         if (req.method === "POST" && match) {
           const id = decodeURIComponent(match[1])
+          const input = await body(req)
+          const mode = input.skillEditMode ?? "local"
+          if (mode !== "local" && mode !== "shared")
+            throw new Error("Invalid skill edit mode.")
           if (match[2] === "apply")
-            return send(res, 200, await repository.apply(id))
-          const plan = await repository.preview(id)
+            return send(res, 200, await repository.apply(id, mode))
+          const plan = await repository.preview(id, mode)
           return send(res, 200, [
+            ...plan.materializations.map((operation) => ({
+              path: operation.path,
+              action: operation.kind,
+              bytes: 0,
+              source: operation.source,
+            })),
             ...plan.moves.map((move) => ({
               path: move.from,
               destination: move.to,
-              action: "move",
+              action: move.linkTarget !== undefined ? "move-link" : "move",
+              bytes: 0,
             })),
             ...[...plan].map(([path, content]) => ({
               path,
               action: content === null ? "delete" : "write",
               bytes: content?.length ?? 0,
+              ...(plan.shared.has(path)
+                ? { sharedTargets: plan.shared.get(path) }
+                : {}),
             })),
           ])
         }

@@ -4,7 +4,7 @@ import type { Workspace, Profile, Resource } from "./workspace"
 export interface WorkspaceRepository {
   load(): Promise<Workspace>
   save(workspace: Workspace): Promise<void>
-  apply(profileId: string): Promise<Workspace>
+  apply(profileId: string, skillEditMode?: SkillEditMode): Promise<Workspace>
 }
 
 export interface Runtime {
@@ -26,10 +26,19 @@ export interface ConfigurationDiscovery {
     targets: ("claude" | "codex")[]
   }): Promise<Workspace>
   refresh(): Promise<Workspace>
-  plan(
-    profileId: string
-  ): Promise<{ path: string; action: string; bytes: number }[]>
+  plan(profileId: string, skillEditMode?: SkillEditMode): Promise<PlannedFile[]>
   testMcp(
     content: string
   ): Promise<{ name: string; version: string; message: string }>
 }
+
+export interface PlannedFile {
+  path: string
+  action: string
+  bytes: number
+  destination?: string
+  source?: string
+  sharedTargets?: ("claude" | "codex")[]
+}
+
+export type SkillEditMode = "local" | "shared"
