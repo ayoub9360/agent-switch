@@ -1,4 +1,5 @@
 import { resolve, extname } from "node:path"
+import { realpath } from "node:fs/promises"
 import { read, inside } from "./files"
 import {
   createServer,
@@ -36,6 +37,33 @@ export function createApi(
     return JSON.parse(Buffer.concat(chunks).toString() || "{}")
   }
   return createServer((req, res) => {
+    // GET requests need not carry Origin. Validate Host as well to prevent
+    // a rebinding domain from reading the local API as its own origin.
+    const address = req.socket.localAddress
+    const port = req.socket.localPort
+    const hosts = allowedOrigins.flatMap((origin) => {
+      try {
+        return [new URL(origin).host]
+      } catch {
+        return []
+      }
+    })
+    if (address) {
+      hosts.push(`${address.includes(":") ? `[${address}]` : address}:${port}`)
+      if (["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address))
+        hosts.push(`localhost:${port}`, `127.0.0.1:${port}`)
+    }
+    if (!req.headers.host || !hosts.includes(req.headers.host.toLowerCase()))
+      return send(res, 403, { error: "Unauthorized host." })
+    const origin = req.headers.origin
+    if (origin && !allowedOrigins.includes(origin))
+      return send(res, 403, { error: "Unauthorized origin." })
+    res.setHeader("X-Frame-Options", "DENY")
+    res.setHeader("Referrer-Policy", "no-referrer")
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    )
     const run = async () => {
       try {
         const url = new URL(req.url ?? "/", "http://localhost")
@@ -49,6 +77,15 @@ export function createApi(
           if (!inside(webDirectory, path))
             return send(res, 403, { error: "Forbidden path." })
           if (!extname(path)) path = resolve(webDirectory, "index.html")
+          const actual = await realpath(path).catch(
+            (error: NodeJS.ErrnoException) => {
+              if (error.code === "ENOENT") return null
+              throw error
+            }
+          )
+          if (!actual) return send(res, 404, { error: "File not found." })
+          if (!inside(await realpath(webDirectory), actual))
+            return send(res, 403, { error: "Forbidden path." })
           const bytes = await read(path)
           if (!bytes) return send(res, 404, { error: "File not found." })
           const types: Record<string, string> = {
@@ -68,9 +105,6 @@ export function createApi(
           res.end(bytes)
           return
         }
-        const origin = req.headers.origin
-        if (origin && !allowedOrigins.includes(origin))
-          return send(res, 403, { error: "Unauthorized origin." })
         if (req.headers["x-agent-switch"] !== "1")
           return send(res, 403, { error: "Agent Switch client required." })
         if (req.method === "GET" && url.pathname === "/api/health")

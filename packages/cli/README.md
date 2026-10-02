@@ -1,20 +1,30 @@
 # Agent Switch
 
-Interface locale pour gérer les configurations globales de Claude Code et Codex :
-instructions, skills, serveurs MCP et hooks.
+**Your coding assistants. One place to configure them.**
 
-Node.js 22.12 ou plus récent est requis.
+Manage Claude Code and Codex instructions, skills, MCP servers, and hooks from a
+local browser interface. Review changes before applying them to native files,
+with backups and conflict detection.
 
-Le paquet npm se nomme `@ayoub9360/agent-switch`. Après publication :
+[Source and screenshots](https://github.com/ayoub9360/agent-switch) ·
+[Documentation](https://github.com/ayoub9360/agent-switch/blob/main/docs/README.md) ·
+[Issues](https://github.com/ayoub9360/agent-switch/issues)
+
+## Run
+
+Requires Node.js 22.12+ and npm. Once the package is published to npm:
 
 ```bash
 npx @ayoub9360/agent-switch@latest
 ```
 
-La commande démarre le serveur sur `127.0.0.1:4141` et ouvre le navigateur.
-Si le port par défaut est occupé, un port libre est choisi. L’adresse est toujours
-affichée. Si une instance web locale existe déjà pour ce compte, elle est réutilisée.
-Arrêter le serveur avec `Ctrl+C` dans le terminal qui l’a démarré.
+The launcher starts the local server and opens the browser. It uses
+`127.0.0.1:4141`, choosing a free port if the default is occupied. The URL is
+printed in your terminal. A verified running local web instance for the same
+home is reused. `Ctrl+C` stops a server started in that terminal.
+
+Until publication, follow the repository's source setup or build a local archive
+with `pnpm pack:cli`.
 
 ```bash
 npx @ayoub9360/agent-switch@latest --no-open
@@ -23,18 +33,18 @@ npx @ayoub9360/agent-switch@latest --help
 npx @ayoub9360/agent-switch@latest --version
 ```
 
-Un port explicitement choisi doit être libre ; `--port 0` demande un port libre.
-`AGENT_SWITCH_PORT` permet également de choisir le port. Le lanceur npm écoute
-uniquement sur la boucle locale. Sans navigateur disponible, ouvrir manuellement
-l’adresse affichée.
+An explicit port must be free; `--port 0` requests a free port.
+`AGENT_SWITCH_PORT` also selects a port. The launcher binds only to loopback.
 
-Les changements sont enregistrés en brouillon dans `~/.agent-switch/`.
-Les configurations des assistants sont modifiées après application explicite,
-avec sauvegarde. Le dossier courant n’a pas d’incidence : seules les configurations
-globales du compte sont gérées. `AGENT_SWITCH_HOME`, `CODEX_HOME` et
-`CLAUDE_CONFIG_DIR` permettent de remplacer les dossiers par défaut.
+## How it works
 
-Les commandes suivantes utilisent le service déjà lancé dans un autre terminal :
+Agent Switch discovers the global configuration of the account running the
+service. Edits remain drafts in `~/.agent-switch/` until explicitly applied.
+It manages one global configuration; the current working directory does not
+select a project. `AGENT_SWITCH_HOME`, `CODEX_HOME`, and `CLAUDE_CONFIG_DIR`
+override the default paths.
+
+Commands use the service already running in another terminal:
 
 ```bash
 npx @ayoub9360/agent-switch@latest workspace --json
@@ -43,5 +53,16 @@ npx @ayoub9360/agent-switch@latest apply
 npx @ayoub9360/agent-switch@latest export --output configuration.json
 ```
 
-La CLI retrouve son adresse dans `~/.agent-switch/endpoint.json`.
-Utiliser `--url http://127.0.0.1:4200` après une sous-commande pour la remplacer.
+The CLI discovers the endpoint in `~/.agent-switch/endpoint.json`. Pass
+`--url http://127.0.0.1:4200` after a subcommand to override it. See the
+[CLI reference](https://github.com/ayoub9360/agent-switch/blob/main/docs/cli.md).
+
+## Security and license
+
+The service can modify assistant configuration and has no built-in user
+accounts. Keep it on localhost or a trusted private network. Exports may contain
+secrets, and testing a stdio MCP starts its configured command. Read the
+[security policy](https://github.com/ayoub9360/agent-switch/blob/main/SECURITY.md).
+
+MIT. See `LICENSE` and `THIRD_PARTY_NOTICES.md`. Agent Switch is an independent
+project, not affiliated with or endorsed by Anthropic or OpenAI.

@@ -39,3 +39,7 @@ coverage/
 
 # npm package archives
 *.tgz
+
+# Package notices copied from the repository during build
+/packages/cli/LICENSE
+/packages/cli/THIRD_PARTY_NOTICES.md

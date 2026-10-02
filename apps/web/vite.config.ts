@@ -4,6 +4,7 @@ import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
 export default defineConfig({
+  build: { license: { fileName: "licenses.md" } },
   server: {
     port: 4141,
     strictPort: true,

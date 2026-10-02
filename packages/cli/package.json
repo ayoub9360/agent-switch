@@ -1,14 +1,16 @@
 {
   "name": "@ayoub9360/agent-switch",
   "version": "0.1.0",
-  "description": "Local configuration manager for AI coding assistants.",
+  "description": "Manage Claude Code and Codex instructions, skills, MCP servers, and hooks from one local interface.",
   "type": "module",
   "bin": {
     "agent-switch": "dist/cli.js"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
     "node": ">=22.12.0"
@@ -20,20 +22,39 @@
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
-    "@modelcontextprotocol/sdk": "^1.0.0",
-    "open": "^10.2.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "open": "^11.0.4",
     "yaml": "^2.9.1",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@agent-switch/server": "workspace:*",
     "@agent-switch/web": "workspace:*",
+    "@eslint/js": "^10.0.1",
     "esbuild": "^0.28.2",
     "eslint": "^10.11.0",
-    "@eslint/js": "^10.0.1",
     "globals": "^17.13.0"
   },
   "publishConfig": {
     "access": "public"
-  }
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayoub9360/agent-switch.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/ayoub9360/agent-switch#readme",
+  "bugs": {
+    "url": "https://github.com/ayoub9360/agent-switch/issues"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "mcp",
+    "ai-agents",
+    "skills",
+    "configuration",
+    "local-first"
+  ]
 }

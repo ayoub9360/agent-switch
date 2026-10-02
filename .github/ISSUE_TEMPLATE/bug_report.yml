@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a reproducible problem with Agent Switch.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please search existing issues first. Do not include tokens, real exports, or private configuration. For vulnerabilities, see SECURITY.md.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Node.js version, Agent Switch version or commit, browser, and startup command.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include minimal sanitized configuration only when necessary.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the exact error and a sanitized screenshot if helpful.
+    validations:
+      required: true

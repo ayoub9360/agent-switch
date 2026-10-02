@@ -31,6 +31,15 @@
     "@ayoub9360/agent-switch#test": {
       "dependsOn": ["build"],
       "outputs": []
+    },
+    "@ayoub9360/agent-switch#build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/LICENSE",
+        "$TURBO_ROOT$/THIRD_PARTY_NOTICES.md"
+      ],
+      "outputs": ["dist/**", "LICENSE", "THIRD_PARTY_NOTICES.md"]
     }
   }
 }

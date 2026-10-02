@@ -1,5 +1,5 @@
 import { build } from "esbuild"
-import { chmod, cp, readFile, rm } from "node:fs/promises"
+import { chmod, cp, mkdir, readFile, rm } from "node:fs/promises"
 
 const directory = import.meta.dirname
 const manifest = JSON.parse(
@@ -31,3 +31,21 @@ await cp(
   { recursive: true }
 )
 await chmod(new URL("./dist/cli.js", import.meta.url), 0o755)
+
+for (const name of ["LICENSE", "THIRD_PARTY_NOTICES.md"])
+  await cp(
+    new URL(`../../${name}`, import.meta.url),
+    new URL(`./${name}`, import.meta.url)
+  )
+await mkdir(new URL("./dist/licenses", import.meta.url), { recursive: true })
+await cp(
+  new URL("../../apps/web/src/assets/logos/LICENSE", import.meta.url),
+  new URL("./dist/licenses/lobe-icons.LICENSE", import.meta.url)
+)
+await cp(
+  new URL(
+    "../ui/node_modules/@fontsource-variable/geist/LICENSE",
+    import.meta.url
+  ),
+  new URL("./dist/licenses/geist.LICENSE", import.meta.url)
+)

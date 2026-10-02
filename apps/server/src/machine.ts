@@ -135,6 +135,9 @@ export class Machine {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return null
         throw error
       })
+      // Check the resolved path even when only a parent directory is a link.
+      if (info && !inside(this.home, await realpath(file)))
+        throw new Error(`File outside the home directory: ${file}`)
       if (!info?.isSymbolicLink()) return { file }
       const target = await realpath(file)
       if (!inside(this.home, target))
@@ -581,7 +584,7 @@ export class Machine {
       resource.name
         .toLowerCase()
         .replace(/[^a-z0-9_-]+/g, "-")
-        .replace(/^-|-$/g, "") || resource.id
+        .replace(/^-|-$/g, "") || hash(resource.id).slice(0, 24)
     const destinations: Binding[] = resource.targets.map((target): Binding => {
       const configDir = target === "codex" ? this.codexHome : this.claudeHome
       if (resource.kind === "hooks")

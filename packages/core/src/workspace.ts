@@ -104,6 +104,21 @@ export function validateResource(resource: Resource): void {
   if (resource.kind !== "instructions" && !resource.content.trim())
     throw new Error("Content cannot be empty.")
   if (resource.kind === "skills") {
+    for (const path of Object.keys(resource.files ?? {})) {
+      if (
+        path.toLowerCase() === "skill.md" ||
+        /[\\:]/.test(path) ||
+        path.includes("\0") ||
+        path
+          .split("/")
+          .some((part) =>
+            ["", ".", "..", "__proto__", "constructor", "prototype"].includes(
+              part
+            )
+          )
+      )
+        throw new Error("Invalid skill attachment path.")
+    }
     const header = resource.content.match(
       /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/
     )

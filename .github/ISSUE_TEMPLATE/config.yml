@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/ayoub9360/agent-switch/blob/main/docs/README.md
+    about: Setup, configuration, CLI, and troubleshooting.
+  - name: Security policy
+    url: https://github.com/ayoub9360/agent-switch/blob/main/SECURITY.md
+    about: Read before reporting a vulnerability. Do not post exploit details publicly.

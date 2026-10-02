@@ -1212,16 +1212,16 @@ describe("Real filesystem integration", () => {
     expect(
       await readFile(join(home, ".claude/rules/new-rule.md"), "utf8")
     ).toBe("Follow this rule")
-    await service.createResource("machine", {
-      ...draft(
-        "skills",
-        "Bad skill",
-        "---\nname: bad\ndescription: bad\n---\n# skill"
-      ),
-      files: { "../outside.txt": Buffer.from("bad").toString("base64") },
-    })
-    await expect(service.apply("machine")).rejects.toThrow("Invalid skill path")
-    await service.discard("machine")
+    expect(() =>
+      service.createResource("machine", {
+        ...draft(
+          "skills",
+          "Bad skill",
+          "---\nname: bad\ndescription: bad\n---\n# skill"
+        ),
+        files: { "../outside.txt": Buffer.from("bad").toString("base64") },
+      })
+    ).toThrow("Invalid skill attachment path")
     await put("original.md", "Keep me")
     await rm(join(home, ".codex/AGENTS.md"))
     await symlink(join(home, "original.md"), join(home, ".codex/AGENTS.md"))
