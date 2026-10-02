@@ -51,7 +51,6 @@ export function Sidebar({
             <ArrowLeftRight size={17} />
           </span>
           <span>Agent Switch</span>
-          <span className="version">α</span>
           <button
             className="mobile-close icon-button"
             aria-label="Fermer le menu"
