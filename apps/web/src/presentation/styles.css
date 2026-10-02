@@ -998,6 +998,7 @@ input[data-slot="input"] {
   margin: 0 3px;
 }
 .pending-action {
+  margin-left: auto;
   padding: 7px 0;
 }
 .pending-action.has-changes {

@@ -11,7 +11,6 @@ import {
   LoaderCircle,
   ArrowRight,
   Plus,
-  GitBranch,
 } from "lucide-react"
 import { Button } from "@agent-switch/ui/components/button"
 import { cn } from "@agent-switch/ui/lib/utils"
@@ -47,7 +46,7 @@ const pageFromHash = (): Page => {
 }
 
 export function App() {
-  const { workspace, controller, error, notice, busy } = useWorkspace()
+  const { workspace, controller, error, notice } = useWorkspace()
   const [page, setPage] = useState<Page>(pageFromHash)
   const [assistant, setAssistant] = useState<Assistant | "all">("all")
   const [editorDirty, setEditorDirty] = useState(false)
@@ -292,12 +291,6 @@ export function App() {
           </div>
         </main>
         <footer className="statusbar">
-          <span>
-            <GitBranch size={13} />
-            {profile.name}
-            <span className="status-divider" />{" "}
-            {busy ? "Enregistrement…" : "Stockage sur la machine"}
-          </span>
           <button
             onClick={() => setReview(true)}
             className={cn(
