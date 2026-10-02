@@ -9,7 +9,7 @@
     "strict": true,
     "noEmit": true,
     "paths": {
-      "@workspace/ui/*": ["./src/*"]
+      "@agent-switch/ui/*": ["./src/*"]
     }
   },
   "include": ["."],

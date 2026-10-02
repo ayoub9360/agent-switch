@@ -31,3 +31,8 @@ dist-ssr
 
 # typescript
 *.tsbuildinfo
+
+# Local configuration and generated artifacts
+.agent-switch/
+coverage/
+.pnpm-store/
