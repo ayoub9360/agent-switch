@@ -1,6 +1,6 @@
 {
   "name": "@ayoub9360/agent-switch",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Manage Claude Code and Codex instructions, skills, MCP servers, and hooks from one local interface.",
   "type": "module",
   "bin": {

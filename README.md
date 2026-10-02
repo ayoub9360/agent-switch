@@ -68,8 +68,10 @@ them. Stop the server with `Ctrl+C`.
 `pnpm start`. It uses a temporary home with sample configurations and leaves your
 own assistant files alone.
 
-The npm launcher is implemented, but the package is not published yet. Use the
-source instructions above or [build an installable archive](docs/cli.md#build-a-local-package).
+The corrected npm release `0.1.1` is being prepared. The initial `0.1.0` release
+predates the security fixes and bundled license notices in this checkout. Until
+`0.1.1` is available, use the source instructions above or
+[build an installable archive](docs/cli.md#build-a-local-package).
 
 ## A simple workflow
 

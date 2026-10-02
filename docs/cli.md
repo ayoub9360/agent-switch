@@ -83,7 +83,7 @@ need Node.js 22.12+ and npm, but do not need the monorepo or pnpm.
 
 ```bash
 pnpm pack:cli
-npm exec --package=./packages/cli/ayoub9360-agent-switch-0.1.0.tgz -- agent-switch --no-open
+npm exec --package=./packages/cli/ayoub9360-agent-switch-0.1.1.tgz -- agent-switch --no-open
 ```
 
 Or run the built launcher directly:
@@ -106,6 +106,8 @@ started in that terminal and releases its lock.
 | `--help`, `-h`    | Show launcher help                      |
 | `--version`, `-v` | Print the package version               |
 
-The npm package is not yet published. After a release, the equivalent launcher
-will be `npx @ayoub9360/agent-switch@latest`, with the same options and subcommands.
+The initial npm release `0.1.0` predates the current security fixes and license
+notices. Release `0.1.1` is prepared in this checkout but still needs publication.
+After it is published, use `npx @ayoub9360/agent-switch@latest`, with the same
+options and subcommands.
 See [releasing](releasing.md) for the maintainer workflow.

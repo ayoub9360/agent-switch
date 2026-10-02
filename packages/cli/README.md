@@ -12,7 +12,7 @@ with backups and conflict detection.
 
 ## Run
 
-Requires Node.js 22.12+ and npm. Once the package is published to npm:
+Requires Node.js 22.12+ and npm. Use version 0.1.1 or newer:
 
 ```bash
 npx @ayoub9360/agent-switch@latest
@@ -23,8 +23,8 @@ The launcher starts the local server and opens the browser. It uses
 printed in your terminal. A verified running local web instance for the same
 home is reused. `Ctrl+C` stops a server started in that terminal.
 
-Until publication, follow the repository's source setup or build a local archive
-with `pnpm pack:cli`.
+To run from source or test an unpublished version, follow the repository's setup
+or build a local archive with `pnpm pack:cli`.
 
 ```bash
 npx @ayoub9360/agent-switch@latest --no-open
