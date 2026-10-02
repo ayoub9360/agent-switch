@@ -230,11 +230,7 @@ export function Overview({
             <div>
               <strong>OpenCode</strong>
               <Pill>Coming soon</Pill>
-              <small>Support planned</small>
             </div>
-          </div>
-          <div className="subtle-caption">
-            Based on configurations on this machine.
           </div>
         </section>
       </aside>
