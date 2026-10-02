@@ -16,6 +16,17 @@
     "dev": {
       "cache": false,
       "persistent": true
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": []
+    },
+    "@agent-switch/core#build": {
+      "outputs": []
+    },
+    "@agent-switch/server#build": {
+      "dependsOn": ["^build"],
+      "outputs": []
     }
   }
 }

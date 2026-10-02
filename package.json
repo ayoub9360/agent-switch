@@ -9,7 +9,10 @@
     "format": "prettier --write .",
     "typecheck": "turbo typecheck",
     "format:check": "prettier --check .",
-    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm build"
+    "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build",
+    "test": "turbo test",
+    "cli": "pnpm --filter @agent-switch/server cli",
+    "start": "pnpm --filter @agent-switch/server start"
   },
   "devDependencies": {
     "prettier": "^3.9.9",
