@@ -1702,22 +1702,52 @@ select {
   overflow-wrap: anywhere;
 }
 .diff-line.removed,
-.diff-code.removed {
+.diff-code-line.removed {
   background: var(--red-soft);
   color: var(--red-text);
 }
 .diff-line.added,
-.diff-code.added {
+.diff-code-line.added {
   background: var(--green-soft);
   color: var(--green-text);
 }
-.diff-code {
-  margin: 0;
-  padding: 12px;
+.diff-content {
+  overflow-x: auto;
+  font-family: var(--font-mono, monospace);
   font-size: 10px;
   line-height: 1.8;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+}
+.diff-content > div {
+  min-width: 100%;
+  width: max-content;
+}
+.diff-hunk {
+  padding: 4px 12px;
+  background: var(--inset);
+  color: var(--subtle);
+}
+.diff-code-line {
+  display: grid;
+  grid-template-columns: 5ch 5ch 3ch minmax(0, 1fr);
+  padding-right: 12px;
+  min-height: 1.8em;
+}
+.diff-line-number {
+  text-align: right;
+  padding-right: 1ch;
+  color: var(--subtle);
+  user-select: none;
+}
+.diff-marker {
+  text-align: center;
+  user-select: none;
+}
+.diff-code-line code {
+  white-space: pre;
+  font: inherit;
+}
+.diff-code-line.note {
+  color: var(--subtle);
 }
 .diff-label {
   padding: 7px 12px;

@@ -10,6 +10,7 @@ import { Button } from "@agent-switch/ui/components/button"
 import { changesFor, resourceSummary, type Profile } from "@/domain/workspace"
 import { useWorkspace } from "../workspace-context"
 import { EmptyState, Modal, Pill } from "./primitives"
+import { ContentDiff } from "./content-diff"
 
 export function ReviewDialog({
   profile,
@@ -91,33 +92,36 @@ export function ReviewDialog({
                       : "Change"}
                 </Pill>
               </div>
-              {change.before && (
-                <div className="diff-line removed">
-                  <span>−</span>
-                  <code>{resourceSummary(change.before)}</code>
-                </div>
-              )}
-              {change.after && (
-                <div className="diff-line added">
-                  <span>+</span>
+              {change.before &&
+              change.after &&
+              resourceSummary(change.before) ===
+                resourceSummary(change.after) ? (
+                <div className="diff-line">
                   <code>{resourceSummary(change.after)}</code>
                 </div>
+              ) : (
+                <>
+                  {change.before && (
+                    <div className="diff-line removed">
+                      <span>−</span>
+                      <code>{resourceSummary(change.before)}</code>
+                    </div>
+                  )}
+                  {change.after && (
+                    <div className="diff-line added">
+                      <span>+</span>
+                      <code>{resourceSummary(change.after)}</code>
+                    </div>
+                  )}
+                </>
               )}
               {change.before?.content !== change.after?.content && (
                 <>
-                  <div className="diff-label">
-                    Content {change.type === "updated" && "· before / after"}
-                  </div>
-                  {change.before && (
-                    <pre className="diff-code removed">
-                      {change.before.content}
-                    </pre>
-                  )}
-                  {change.after && (
-                    <pre className="diff-code added">
-                      {change.after.content}
-                    </pre>
-                  )}
+                  <div className="diff-label">Content</div>
+                  <ContentDiff
+                    before={change.before?.content ?? ""}
+                    after={change.after?.content ?? ""}
+                  />
                 </>
               )}
             </section>
