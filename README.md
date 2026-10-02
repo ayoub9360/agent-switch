@@ -9,6 +9,7 @@ Review the diff. Apply when you're ready.
 
 [Getting started](#getting-started) · [Documentation](docs/README.md) · [Contributing](CONTRIBUTING.md) · [Report a bug](https://github.com/ayoub9360/agent-switch/issues/new?template=bug_report.yml)
 
+[![npm version](https://img.shields.io/npm/v/@ayoub9360/agent-switch)](https://www.npmjs.com/package/@ayoub9360/agent-switch)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22.12%2B-43853d)](package.json)
 [![Local configuration](https://img.shields.io/badge/configuration-local-6e56cf)](docs/configuration.md)
@@ -50,7 +51,33 @@ _Screenshots show the running application with fictional data. Reproduce them wi
 
 ## Getting started
 
-Requires **Node.js 22.12+** and **pnpm 12.8.1**.
+Requires **Node.js 22.12+** and **npm**. Run from any directory:
+
+```bash
+npx @ayoub9360/agent-switch@latest
+```
+
+The command starts the local server and opens the app in your browser. No cloning,
+manual build, or pnpm installation is needed. The default address is
+**http://127.0.0.1:4141**; if that port is occupied, the launcher chooses a free
+one and prints the URL. Stop the server with `Ctrl+C`.
+
+Agent Switch discovers the global configuration of the account running the
+server. Edits remain drafts until you review and apply them.
+
+Useful options:
+
+```bash
+npx @ayoub9360/agent-switch@latest --no-open
+npx @ayoub9360/agent-switch@latest --port 4200
+npx @ayoub9360/agent-switch@latest --help
+```
+
+See the [CLI reference](docs/cli.md) for commands and configuration options.
+
+### Run from source
+
+For development or the isolated demo, install **pnpm 12.8.1** and run:
 
 ```bash
 git clone https://github.com/ayoub9360/agent-switch.git
@@ -60,18 +87,11 @@ pnpm build
 pnpm start
 ```
 
-Open **http://127.0.0.1:4141**. Agent Switch discovers the global configuration of
-the account running the server. Edits remain drafts until you review and apply
-them. Stop the server with `Ctrl+C`.
+Open **http://127.0.0.1:4141**.
 
 **Want to look around first?** After building, run `pnpm demo` instead of
 `pnpm start`. It uses a temporary home with sample configurations and leaves your
 own assistant files alone.
-
-The corrected npm release `0.1.1` is being prepared. The initial `0.1.0` release
-predates the security fixes and bundled license notices in this checkout. Until
-`0.1.1` is available, use the source instructions above or
-[build an installable archive](docs/cli.md#build-a-local-package).
 
 ## A simple workflow
 

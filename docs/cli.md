@@ -106,8 +106,22 @@ started in that terminal and releases its lock.
 | `--help`, `-h`    | Show launcher help                      |
 | `--version`, `-v` | Print the package version               |
 
-The initial npm release `0.1.0` predates the current security fixes and license
-notices. Release `0.1.1` is prepared in this checkout but still needs publication.
-After it is published, use `npx @ayoub9360/agent-switch@latest`, with the same
-options and subcommands.
-See [releasing](releasing.md) for the maintainer workflow.
+## Run from npm
+
+Requires Node.js 22.12+ and npm. No source checkout or pnpm is needed:
+
+```bash
+npx @ayoub9360/agent-switch@latest
+```
+
+Use version `0.1.1` or newer, which includes the security fixes and bundled
+license notices. All launcher options and service subcommands are available:
+
+```bash
+npx @ayoub9360/agent-switch@latest --no-open
+npx @ayoub9360/agent-switch@latest --version
+npx @ayoub9360/agent-switch@latest plan
+```
+
+`plan` and other service commands require a running server. See
+[releasing](releasing.md) for the maintainer workflow.

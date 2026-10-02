@@ -3,7 +3,7 @@
 This is a maintainer checklist, not an automatic publishing workflow. A source
 checkout, a public GitHub repository, and a published npm package are separate
 states. Version `0.1.0` was published from an older checkout. Version `0.1.1`
-contains the security fixes and license notices and is prepared for publication.
+is published and includes the security fixes and license notices.
 A published version cannot be overwritten, even when its registry metadata is
 not yet visible to `npm view`.
 
